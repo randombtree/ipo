@@ -1,0 +1,16 @@
+#!/bin/sh
+# Shell script to run the 'ipo' python command
+
+# Quick'n' dirty "running from repo" detector. Run from bin or project root triggers this
+if [ -d .git ];then
+    addpath="$PWD/ipo"
+elif [ -d ../.git ];then
+    addpath=$(dirname $PWD)/ipo
+fi
+
+if [ x"$addpath" != x ];then
+    export PYTHONPATH=$PYTHONPATH:$addpath
+fi
+# Else expect to have 'ipo' installed as a python module.
+
+exec python3 -m ipo $@
