@@ -23,6 +23,8 @@ def main():
     cmd_daemon.add_subcommand(subparser)
     cmd_misc.add_subcommand(subparser)
     args = parser.parse_args()
-    print(args)
     # The subparsers add entry points to the namespace in the form of a callable function
-    args.func(args)
+    if 'func' in args:
+        args.func(args)
+    else:
+        parser.print_help()
