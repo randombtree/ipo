@@ -110,10 +110,11 @@ async def iconctl_server(icond: Icond):
         await server.serve_forever()
 
 
-async def main():
-    """ Icond daemon """
-    icond = Icond()
+class InitializationException(Exception):
+    ...
 
+
+def init_repository(icond: Icond):
     print("Initializing repository..")
     # Repository
     try:
@@ -138,7 +139,14 @@ async def main():
     except docker.errors.APIError as e:
         print("Failed to communicate with Docker")
         print(e)
-        sys.exit(1)
+        raise InitializationException('Failed to communicate with Docker') from e
+
+
+async def main():
+    """ Icond daemon """
+    icond = Icond()
+
+    init_repository(icond)
     print("Starting server")
     # Start the control channel server
     ctl_server = asyncio.create_task(iconctl_server(icond),
