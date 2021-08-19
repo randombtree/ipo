@@ -7,7 +7,7 @@ Acts as an entry-point for all subcommands.
 import argparse
 
 from . import cmd_daemon
-
+from . import cmd_misc
 
 def main():
     """
@@ -21,6 +21,7 @@ def main():
     )
     subparser = parser.add_subparsers(dest = 'command', help = 'sub-command help')
     cmd_daemon.add_subcommand(subparser)
+    cmd_misc.add_subcommand(subparser)
     args = parser.parse_args()
     print(args)
     # The subparsers add entry points to the namespace in the form of a callable function
