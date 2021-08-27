@@ -89,7 +89,7 @@ class IconMessage:
         if msg_type == cls.TYPE_COMMAND:
             msg_command = source.pop(cls.FIELD_COMMAND)
             if msg_command == cls.COMMAND_SHUTDOWN:
-                return Shutdown(**source)
+                return Shutdown(msg_id = msg_id, **source)
             raise InvalidMessage(f'Unhandled command {msg_command}')
         return IconMessage(msg_type, msg_id = msg_id, **source)
 
