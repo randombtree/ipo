@@ -21,7 +21,25 @@ def stop_daemon(namespace: argparse.Namespace):
     """
     Handle stopping of daemon. Callback from cmdline
     """
-    print("Stop daemon")
+
+    from .connection import Connection
+    from .daemon import message
+    import asyncio
+
+    async def send_shutdown():
+        conn = await Connection.connect()
+        await conn.write(message.Shutdown())
+        msg = await conn.read()
+        print(msg.as_dict())
+
+    # TODO: This is fairly generic code, split it out
+    print('Stop daemon')
+    try:
+        asyncio.run(send_shutdown())
+    except PermissionError:
+        print('Permission denied when communicating with daemon')
+    except OSError as e:
+        print(f'Error {e} when communicating with daemon')
 
 
 def add_subcommand(parser: argparsehelper.AddParser):
