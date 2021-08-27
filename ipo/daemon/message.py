@@ -22,10 +22,18 @@ class InvalidMessage(Exception):
 
 class IconMessage:
     """ Icon Control message """
-    FIELD_TYPE = "type"
-    FIELD_ID   = "id"
+    # Common fields (dictionary keys) used in messages
+    FIELD_ID      = "id"
+    FIELD_TYPE    = "type"
+    FIELD_COMMAND = "command"
+
+    # FIELD_TYPE can be one of the following:
     TYPE_COMMAND = "command"
+    TYPE_REPLY = "reply"
     TYPE_ERROR = "error"
+
+    # FIELD_COMMAND can me one of the following (when appropriable)
+    COMMAND_SHUTDOWN = "shutdown"
 
     def __init__(self, msg_type: str = TYPE_COMMAND, msg_id = None, **data):
         """
@@ -35,6 +43,9 @@ class IconMessage:
         """
 
         self.msg_type = msg_type
+        # Allow msg_id to be supplied from the data; this usually helps when de-serializing data
+        if msg_id is None and self.FIELD_ID in data:
+            msg_id = data[self.FIELD_ID]
         # create uuid from different types; n.b. UUID objects are immutable
         self.msg_id = \
             uuid.UUID(msg_id) if isinstance(msg_id, str) \
@@ -61,16 +72,38 @@ class IconMessage:
         }
         return d
 
+    def create_reply(self, **data) -> 'Reply':
+        """ Create a reply message based on this message (i.e. copy id) """
+        return Reply(msg_id = self.msg_id, **data)
+
     @classmethod
-    def from_dict(cls, source: dict):
+    def from_dict(cls, source: dict) -> 'IconMessage':
         """ Re-construct message from dictionary data """
         if not (cls.FIELD_TYPE in source and cls.FIELD_ID in source):
             raise InvalidMessage("missing in message: %s %s" % (
                                  "type " if not cls.FIELD_TYPE else "",
                                  "id " if not cls.FIELD_ID else ""))
-        msg_type = source[cls.FIELD_TYPE]
-        msg_id = source[cls.FIELD_ID]
+        msg_type = source.pop(cls.FIELD_TYPE)
+        msg_id = source.pop(cls.FIELD_ID)
+        # Parse convinience classes
+        if msg_type == cls.TYPE_COMMAND:
+            msg_command = source.pop(cls.FIELD_COMMAND)
+            if msg_command == cls.COMMAND_SHUTDOWN:
+                return Shutdown(**source)
+            raise InvalidMessage(f'Unhandled command {msg_command}')
         return IconMessage(msg_type, msg_id = msg_id, **source)
+
+
+class Shutdown(IconMessage):
+    """ Convinience class for a Shutdown message """
+    def __init__(self, **kvargs):
+        super().__init__(msg_type = IconMessage.TYPE_COMMAND, command = IconMessage.COMMAND_SHUTDOWN, **kvargs)
+
+
+class Reply(IconMessage):
+    """ Convinience class for a simple reply message """
+    def __init__(self, msg_id, **data):
+        super().__init__(msg_type = IconMessage.TYPE_REPLY, msg_id = msg_id, **data)
 
 
 class JSONWriter:
@@ -84,6 +117,15 @@ class JSONWriter:
         """ Write message as JSON to backend """
         if isinstance(data, IconMessage):
             data = data.as_dict()
-        s = json.dumps(data)
+        s = json.dumps(data) + '\n'
+        print(s)
         self.writer.write(s.encode())
         await self.writer.drain()
+
+
+class MessageReader(JSONReader):
+    """ Reader that translates json chunks to ICON messages """
+    async def read(self) -> IconMessage:
+        """ Read next ICON message; might throw if message is malformed """
+        msg = await super().read()
+        return IconMessage.from_dict(msg)

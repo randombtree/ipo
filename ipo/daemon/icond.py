@@ -13,32 +13,95 @@ from typing import Union
 import docker  # type: ignore
 
 from . message import (IconMessage, InvalidMessage, JSONReader, JSONWriter)
-
+from . import message
+from . eventqueue import GlobalEventQueue, Subscription
 
 ICOND_REPO = "icond_repository"   # ICON local repository
 ICOND_CTL_SOCK = "/var/run/icond/icond.sock"   # ICON control socket
 
+class ShutdownEvent:
+    ...
 
 class Icond:
     """ Icond global state """
+    shutdown: bool
+    eventqueue: GlobalEventQueue
+
     def __init__(self):
         self.docker = docker.DockerClient(base_url='unix://var/run/docker.sock')
+        self.shutdown = False
+        self.eventqueue = GlobalEventQueue()
+
+    def do_shutdown(self):
+        """ Shutdown daemon commanded """
+        self.shutdown = True
+        self.eventqueue.publish(ShutdownEvent())
+
+    def subscribe_event(self, event: type) -> Subscription:
+        """ Subscribe to icond events """
+        return self.eventqueue.subscribe(event)
+
+
+async def waitany(tset: set[asyncio.Task]) -> tuple[asyncio.Task, asyncio.Task]:
+    """ Convinience function to wait for any async task completion """
+    return await asyncio.wait(tset, return_when = asyncio.FIRST_COMPLETED)
+
+
+async def iconctl_connection_handler(reader, writer, icond: Icond):
+    """ Icon control channel handler """
+    reader = JSONReader(reader)
+    writer = JSONWriter(writer)
+    with icond.subscribe_event(ShutdownEvent) as shutdown_event:
+        # The shutdown message helps us to tear down the connection
+        # while waiting for peer actions (i.e. reading, writing)
+        shutdown_task = asyncio.create_task(shutdown_event.get())
+        while not icond.shutdown:
+            reply_msg = None
+            try:
+                print("Reading...")
+                read_task = asyncio.create_task(reader.read())
+                (done, _pending) = await waitany({shutdown_task, read_task})
+                if shutdown_task in done:
+                    assert isinstance(shutdown_task.result(), ShutdownEvent)
+                    break
+                assert read_task in done
+                e = read_task.exception()
+                if e is not None:
+                    # Task threw exception, connection probably died
+                    print(f'Connection error {e}')
+                    break
+                msg = read_task.result()
+                print(f'Got line {msg}')
+                msg = IconMessage.from_dict(msg)
+                if isinstance(msg, message.Shutdown):
+                    print('Shutting down')
+                    reply_msg = msg.create_reply(message = 'Shutting down')
+                    icond.do_shutdown()
+                else:
+                    print(f'Not handling message {msg}')
+            except (json.JSONDecodeError, InvalidMessage) as e:
+                print(f'Invalid message: {e.msg}')
+                reply_msg = IconMessage(IconMessage.TYPE_ERROR, "connection", msg = e.msg)
+
+            if reply_msg is None:
+                continue
+            reply_task = asyncio.create_task(writer.write(reply_msg))
+            (done, _pending) = await waitany({shutdown_task, reply_task})
+            if shutdown_task in done:
+                break
+            assert reply_task in done
+            e = read_task.exception()
+            if e is not None:
+                print(f'Exception writing reply {e}')
+                break
 
 
 def iconctl_connection_factory(icond: Icond):
     """ Create a connection handler with icond included in the closure """
-    async def iconctl_connection_handler(reader, writer):
-        reader = JSONReader(reader)
-        writer = JSONWriter(writer)
-        while True:
-            try:
-                msg = await reader.read()
-                print(f"Got line {msg}")
-                msg = IconMessage(msg)
-            except (json.JSONDecodeError, InvalidMessage) as e:
-                reply = IconMessage(IconMessage.TYPE_ERROR, "connection", msg = e.msg)
-                await writer.write(reply)
-    return iconctl_connection_handler
+
+    async def connection_handler(reader, writer):
+        return await iconctl_connection_handler(reader, writer, icond)
+    return connection_handler
 
 
 class RPCHandler:
@@ -111,6 +174,7 @@ async def iconctl_server(icond: Icond):
 
 
 class InitializationException(Exception):
+    """ Exception inicating something went wrong during initialization """
     ...
 
 
@@ -149,14 +213,20 @@ async def main():
     init_repository(icond)
     print("Starting server")
     # Start the control channel server
-    ctl_server = asyncio.create_task(iconctl_server(icond),
-                                     name = "ctl_server")
-    # Exit on first completetion
-    done, pending = await asyncio.wait(
-        (ctl_server,),
-        return_when = asyncio.FIRST_COMPLETED)
+    ctl_server_task = asyncio.create_task(iconctl_server(icond),
+                                          name = "ctl_server")
+
+    with icond.subscribe_event(ShutdownEvent) as shutdown_event:
+        shutdown_task = asyncio.create_task(shutdown_event.get())
+        (done, _pending) = await waitany({shutdown_task, ctl_server_task})
+        # Any task finishing indicates that we want to exit, either due to some internal
+        # error or a shutdown event
+        if shutdown_task in done:
+            print("Shutdown signaled")
+
 
 def start(params : argparse.Namespace):
+    """ Entry point for module run """
     if not (params.force or os.geteuid() == 0):
         print("Starting of the ICON daemon might fail when not run as root...")
         print("Try --force if you are confident it will work")
