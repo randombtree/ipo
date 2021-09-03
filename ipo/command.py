@@ -6,8 +6,12 @@ Acts as an entry-point for all subcommands.
 
 import argparse
 
+# TODO: Dynamically probe for cmd_*?
 from . import cmd_daemon
 from . import cmd_misc
+from . import cmd_container
+
+SUBCOMMANDS=[cmd_daemon, cmd_misc, cmd_container]
 
 def main():
     """
@@ -20,8 +24,8 @@ def main():
         description = 'Python ICON orchestrator command line interface'
     )
     subparser = parser.add_subparsers(dest = 'command', help = 'sub-command help')
-    cmd_daemon.add_subcommand(subparser)
-    cmd_misc.add_subcommand(subparser)
+    for m in SUBCOMMANDS:
+        m.add_subcommand(subparser)
     args = parser.parse_args()
     # The subparsers add entry points to the namespace in the form of a callable function
     if 'func' in args:

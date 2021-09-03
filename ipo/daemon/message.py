@@ -34,6 +34,7 @@ class IconMessage:
 
     # FIELD_COMMAND can me one of the following (when appropriable)
     COMMAND_SHUTDOWN = "shutdown"
+    COMMAND_CONTAINER_RUN = 'container run'
 
     def __init__(self, msg_type: str = TYPE_COMMAND, msg_id = None, **data):
         """
@@ -63,6 +64,12 @@ class IconMessage:
     def __setitem__(self, key, value):
         self.data[key] = value
 
+    def __getattr__(self, key):
+        """ Convinience method for accessing message fields directly as msg.field """
+        if key not in self.data:
+            raise AttributeError(f'Field {key} not present in message')
+        return self.data[key]
+
     def as_dict(self):
         """ Output message as dict data, for later feeding to json """
         d = {
@@ -88,16 +95,31 @@ class IconMessage:
         # Parse convinience classes
         if msg_type == cls.TYPE_COMMAND:
             msg_command = source.pop(cls.FIELD_COMMAND)
-            if msg_command == cls.COMMAND_SHUTDOWN:
-                return Shutdown(msg_id = msg_id, **source)
-            raise InvalidMessage(f'Unhandled command {msg_command}')
+            msg_cls = \
+                Shutdown if msg_command == cls.COMMAND_SHUTDOWN \
+                else ContainerRun if msg_command == cls.COMMAND_CONTAINER_RUN \
+                else None
+            if msg_cls is None:
+                raise InvalidMessage(f'Unhandled command {msg_command}')
+            return msg_cls(msg_id = msg_id, **source)
         return IconMessage(msg_type, msg_id = msg_id, **source)
+
+    def __str__(self):
+        return f'({self.msg_type}, {self.msg_id}) {self.data}'
 
 
 class Shutdown(IconMessage):
     """ Convinience class for a Shutdown message """
     def __init__(self, **kvargs):
         super().__init__(msg_type = IconMessage.TYPE_COMMAND, command = IconMessage.COMMAND_SHUTDOWN, **kvargs)
+
+class ContainerRun(IconMessage):
+    ARG_IMAGE = 'image'
+    """ Container run command """
+    def __init__(self, **kvargs):
+        if ContainerRun.ARG_IMAGE not in kvargs:
+            raise InvalidMessage('missing image argument')
+        super().__init__(msg_type = IconMessage.TYPE_COMMAND, command = IconMessage.COMMAND_CONTAINER_RUN, **kvargs)
 
 
 class Reply(IconMessage):

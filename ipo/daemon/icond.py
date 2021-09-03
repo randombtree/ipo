@@ -73,10 +73,17 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
                 msg = read_task.result()
                 print(f'Got line {msg}')
                 msg = IconMessage.from_dict(msg)
+                print(f'Received message: {msg}')
                 if isinstance(msg, message.Shutdown):
                     print('Shutting down')
-                    reply_msg = msg.create_reply(message = 'Shutting down')
+                    reply_msg = msg.create_reply(msg = 'Shutting down')
                     icond.do_shutdown()
+                elif isinstance(msg, message.ContainerRun):
+                    print(f'Run container {msg.image}')
+                    # TODO!:
+                    # Docker commands are synchronous, so some
+                    # threading will be needed here; doing some bad blocking
+                    reply_msg = msg.create_reply(msg = 'Working..')
                 else:
                     print(f'Not handling message {msg}')
             except (json.JSONDecodeError, InvalidMessage) as e:
@@ -85,6 +92,7 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
 
             if reply_msg is None:
                 continue
+            print(f'Sending reply {reply_msg}')
             reply_task = asyncio.create_task(writer.write(reply_msg))
             (done, _pending) = await waitany({shutdown_task, reply_task})
             if shutdown_task in done:
