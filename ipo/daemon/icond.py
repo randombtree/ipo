@@ -24,6 +24,7 @@ class ShutdownEvent:
 
 class Icond:
     """ Icond global state """
+    docker: docker.DockerClient
     shutdown: bool
     eventqueue: GlobalEventQueue
 
