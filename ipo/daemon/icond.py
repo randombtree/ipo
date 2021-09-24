@@ -80,11 +80,17 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
                     reply_msg = msg.create_reply(msg = 'Shutting down')
                     icond.do_shutdown()
                 elif isinstance(msg, message.ContainerRun):
+                    image = msg.image
                     print(f'Run container {msg.image}')
                     # TODO!:
                     # Docker commands are synchronous, so some
                     # threading will be needed here; doing some bad blocking
-                    reply_msg = msg.create_reply(msg = 'Working..')
+                    try:
+                        docker_image = icond.docker.images.get(image)
+                        print(docker_image)
+                        reply_msg = msg.create_reply(msg = 'Working..')
+                    except docker.errors.ImageNotFound:
+                        reply_msg = IconMessage(IconMessage.TYPE_ERROR, msg_id = msg.msg_id, msg = 'Image not found')
                 else:
                     print(f'Not handling message {msg}')
             except (json.JSONDecodeError, InvalidMessage) as e:
