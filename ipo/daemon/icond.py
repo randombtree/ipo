@@ -12,35 +12,13 @@ from typing import Union
 
 import docker  # type: ignore
 
+from . state import Icond, ShutdownEvent
 from . message import (IconMessage, InvalidMessage, JSONReader, JSONWriter)
 from . import message
 from . eventqueue import GlobalEventQueue, Subscription
 
 ICOND_REPO = "icond_repository"   # ICON local repository
 ICOND_CTL_SOCK = "/var/run/icond/icond.sock"   # ICON control socket
-
-class ShutdownEvent:
-    ...
-
-class Icond:
-    """ Icond global state """
-    docker: docker.DockerClient
-    shutdown: bool
-    eventqueue: GlobalEventQueue
-
-    def __init__(self):
-        self.docker = docker.DockerClient(base_url='unix://var/run/docker.sock')
-        self.shutdown = False
-        self.eventqueue = GlobalEventQueue()
-
-    def do_shutdown(self):
-        """ Shutdown daemon commanded """
-        self.shutdown = True
-        self.eventqueue.publish(ShutdownEvent())
-
-    def subscribe_event(self, event: type) -> Subscription:
-        """ Subscribe to icond events """
-        return self.eventqueue.subscribe(event)
 
 
 async def waitany(tset: set[asyncio.Task]) -> tuple[asyncio.Task, asyncio.Task]:
