@@ -8,7 +8,8 @@ import os
 import json
 import uuid
 import argparse
-from typing import Union
+from typing import Union, Any
+from collections.abc import Callable
 
 import docker  # type: ignore
 
@@ -16,6 +17,7 @@ from . state import Icond, ShutdownEvent
 from . message import (IconMessage, InvalidMessage, JSONReader, JSONWriter)
 from . import message
 from . eventqueue import GlobalEventQueue, Subscription
+from . ctltask import CTL_HANDLERS, MessageTaskHandler
 
 ICOND_REPO = "icond_repository"   # ICON local repository
 ICOND_CTL_SOCK = "/var/run/icond/icond.sock"   # ICON control socket
@@ -26,67 +28,196 @@ async def waitany(tset: set[asyncio.Task]) -> tuple[asyncio.Task, asyncio.Task]:
     return await asyncio.wait(tset, return_when = asyncio.FIRST_COMPLETED)
 
 
+class AsyncTask:
+    """
+    Wrapper around some async task to be run in the AsyncTaskRunner
+    """
+    fctry: Callable[[], Any]
+    _restartable: bool
+
+    def __init__(self, fctry: Callable[[], Any], restartable: bool = True):
+        """
+        fctry: The factory method that creates an async task to wait for.
+        restartable: If set to false the factory method will run only once.
+        """
+        self.fctry = fctry
+        self._restartable = restartable
+        self._asynctask = None
+
+    @property
+    def restartable(self):
+        """ Get the restartable property """
+        return self._restartable
+
+    @property
+    def asynctask(self):
+        """
+        Get the underlying async task.
+        """
+        return self._asynctask
+
+    def start(self):
+        """
+        Start the task; Should only be used by the task runner.
+        """
+        assert self._asynctask is None or self._asynctask.done()
+        self._asynctask = self.fctry()
+        return self._asynctask
+
+    def result(self):
+        """ Get the underlying task result """
+        assert self._asynctask.done()
+        return self._asynctask.result()
+
+    def exception(self):
+        """ Get the underlying exception, if any """
+        assert self._asynctask.done()
+        return self._asynctask.exception()
+
+
+class AsyncTaskRunner:
+    """
+    Manager of a set of tasks that have differing run-lengths.
+    """
+    active: dict[asyncio.Task, AsyncTask]
+    completed: set[asyncio.Task]
+
+    def __init__(self):
+        self.active = dict()    # Currently running (or completed) tasks
+        self.completed = set()  # Previously completed asynctasks
+
+    def start_task(self, task: AsyncTask):
+        """ Add and start the task """
+        asynctask = task.start()
+        self.active[asynctask] = task
+
+    def remove_task(self, task: AsyncTask):
+        """ Remove a task from the runner. If it's still active it will be canceled """
+        asynctask = task.asynctask
+        if asynctask in self.completed:
+            # This is just being overly cautious:
+            if asynctask in self.completed:
+                self.completed.remove(asynctask)
+        # This will hinder it from running next time
+        # Also, cancel task or it might linger on for basically forever
+        if asynctask in self.active:
+            del self.active[asynctask]
+            if not (asynctask.done() or asynctask.cancelled()):
+                asynctask.cancel()
+
+    async def waitany(self) -> list[AsyncTask]:
+        """ Wait for any completed tasks, returns list of AsyncTasks that completed """
+        # Re-arm tasks that completed last round
+        # We don't re-arm them earlier as to allow
+        # smoother removals of tasks
+        for oldtask in self.completed:
+            if oldtask in self.active:
+                task = self.active[oldtask]
+                del self.active[oldtask]
+                # Re-start task
+                if task.restartable:
+                    asynctask = task.start()
+                    self.active[asynctask] = task
+                # one-shot tasks won't get re-added, thus will disappear
+        # Wait
+        done, _pending = await waitany(set(self.active.keys()))
+        self.completed = done
+        return set(self.active[t] for t in done)
+
+
 async def iconctl_connection_handler(reader, writer, icond: Icond):
     """ Icon control channel handler """
     reader = JSONReader(reader)
     writer = JSONWriter(writer)
+    msg_handlers = dict()  # type: dict[str, MessageTaskHandler]  # msg_id -> TaskObject
+    msg_tasks    = dict()  # type: dict[AsyncTask, str]           # task -> msg_id
+    asyncrunner = AsyncTaskRunner()
+    outqueue = asyncio.Queue()     # Messages queued for transfer
+
+    async def outqueue_flusher():
+        """
+        All outbound traffic goes thru the outqueue. In this coroutine
+        we flush the queue to the real pipe.
+        """
+        while True:
+            msg = await outqueue.get()
+            await writer.write(msg)
+            outqueue.task_done()
+
     with icond.subscribe_event(ShutdownEvent) as shutdown_event:
         # The shutdown message helps us to tear down the connection
         # while waiting for peer actions (i.e. reading, writing)
-        shutdown_task = asyncio.create_task(shutdown_event.get())
+        shutdown_task = AsyncTask(lambda: asyncio.create_task(shutdown_event.get()), restartable = False)
+        asyncrunner.start_task(shutdown_task)
+        # The reader is always active to receive new messages
+        read_task = AsyncTask(lambda: asyncio.create_task(reader.read()))
+        asyncrunner.start_task(read_task)
+
+        flush_task = AsyncTask(lambda: asyncio.create_task(outqueue_flusher()), restartable = False)
+        asyncrunner.start_task(flush_task)
         while not icond.shutdown:
-            reply_msg = None
-            try:
-                print("Reading...")
-                read_task = asyncio.create_task(reader.read())
-                (done, _pending) = await waitany({shutdown_task, read_task})
-                if shutdown_task in done:
-                    assert isinstance(shutdown_task.result(), ShutdownEvent)
-                    break
-                assert read_task in done
+            completed = await asyncrunner.waitany()
+            if shutdown_task in completed:
+                assert isinstance(shutdown_task.result(), ShutdownEvent)
+                # TODO: Graceful shutdown to client
+                break
+
+            # If the queue flusher dies there is no receiver left, just quit
+            if flush_task in completed:
+                # Yeah, could do some diagnostics what happened.. whatever :)
+                e = flush_task.exception()
+                print('Client closed the receive end (connection died?) {e}')
+                break
+
+            # There was something to read
+            if read_task in completed:
+                completed.remove(read_task)
                 e = read_task.exception()
                 if e is not None:
                     # Task threw exception, connection probably died
                     print(f'Connection error {e}')
                     break
-                msg = read_task.result()
-                print(f'Got line {msg}')
-                msg = IconMessage.from_dict(msg)
-                print(f'Received message: {msg}')
-                if isinstance(msg, message.Shutdown):
-                    print('Shutting down')
-                    reply_msg = msg.create_reply(msg = 'Shutting down')
-                    icond.do_shutdown()
-                elif isinstance(msg, message.ContainerRun):
-                    image = msg.image
-                    print(f'Run container {msg.image}')
-                    # TODO!:
-                    # Docker commands are synchronous, so some
-                    # threading will be needed here; doing some bad blocking
-                    try:
-                        docker_image = icond.docker.images.get(image)
-                        print(docker_image)
-                        reply_msg = msg.create_reply(msg = 'Working..')
-                    except docker.errors.ImageNotFound:
-                        reply_msg = IconMessage(IconMessage.TYPE_ERROR, msg_id = msg.msg_id, msg = 'Image not found')
-                else:
-                    print(f'Not handling message {msg}')
-            except (json.JSONDecodeError, InvalidMessage) as e:
-                print(f'Invalid message: {e.msg}')
-                reply_msg = IconMessage(IconMessage.TYPE_ERROR, "connection", msg = e.msg)
+                try:
+                    msg = read_task.result()
+                    print(f'Got line {msg}')
+                    msg = IconMessage.from_dict(msg)
+                    print(f'Received message: {msg}')
+                    if isinstance(msg, message.Shutdown):
+                        print('Shutting down')
+                        reply_msg = msg.create_reply(msg = 'Shutting down')
+                        icond.do_shutdown()
+                    elif msg.msg_id in msg_handlers:
+                        print('Posting message to existing handler')
+                        msg_handlers[msg.msg_id].post(msg)
+                    else:
+                        # New task 'connection'
+                        t = type(msg)
+                        if t in CTL_HANDLERS:
+                            handler = CTL_HANDLERS[t](outqueue, icond)
+                            task = AsyncTask(lambda: handler.run(msg), restartable = False)
+                            asyncrunner.start_task(task)
+                            msg_tasks[task] = msg.msg_id
+                            msg_handlers[msg.msg_id] = handler
+                        else:
+                            print(f'Not handling message {msg}')
 
-            if reply_msg is None:
-                continue
-            print(f'Sending reply {reply_msg}')
-            reply_task = asyncio.create_task(writer.write(reply_msg))
-            (done, _pending) = await waitany({shutdown_task, reply_task})
-            if shutdown_task in done:
-                break
-            assert reply_task in done
-            e = read_task.exception()
-            if e is not None:
-                print(f'Exception writing reply {e}')
-                break
+                except (json.JSONDecodeError, InvalidMessage) as e:
+                    print(f'Invalid message: {e.msg}')
+                    reply_msg = IconMessage(IconMessage.TYPE_ERROR, "connection", msg = e.msg)
+                    await outqueue.put(reply_msg)
+
+            # A task handler finished?
+            for task in completed:
+                if task not in msg_tasks:
+                    print(f'Unknown task finished? Unhandled: {task}')
+                    continue
+                # Just cleanup
+                msg_id = msg_tasks[task]
+                handler = msg_handlers[msg_id]
+                del msg_handlers[msg_id]
+                del msg_tasks[task]
+                print(f'Handler {handler} finished')
+    print('Connection closed')
 
 
 def iconctl_connection_factory(icond: Icond):
