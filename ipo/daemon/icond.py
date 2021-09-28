@@ -186,6 +186,8 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
                     if isinstance(msg, message.Shutdown):
                         print('Shutting down')
                         reply_msg = msg.create_reply(msg = 'Shutting down')
+                        await outqueue.put(reply_msg)
+                        await outqueue.join()  # Flush outqueue
                         icond.do_shutdown()
                     elif msg.msg_id in msg_handlers:
                         print('Posting message to existing handler')
