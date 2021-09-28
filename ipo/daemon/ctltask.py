@@ -6,30 +6,10 @@ from typing import Union
 
 import docker
 
+from . events import ShutdownEvent, MessageEvent
 from . state import Icond
 from . message import IconMessage
 from . import message
-
-# TODO: Consolidate event classes
-class ShutdownEvent:
-    ...
-
-
-class StartEvent:
-    ...
-
-
-class MessageEvent:
-    """ Message delivery event """
-    msg: IconMessage
-
-    def __init__(self, msg: IconMessage):
-        """ msg: The icon message """
-        self.msg = msg
-
-    def get(self):
-        """ Get the message """
-        return self.msg
 
 
 class MessageTaskHandler:

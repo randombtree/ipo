@@ -3,10 +3,9 @@ ICOND global state
 """
 from docker import DockerClient
 
+from . events import ShutdownEvent
 from . eventqueue import GlobalEventQueue, Subscription
 
-class ShutdownEvent:
-    ...
 
 class Icond:
     """ Icond global state """

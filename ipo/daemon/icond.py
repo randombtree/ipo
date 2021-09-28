@@ -13,7 +13,8 @@ from collections.abc import Callable
 
 import docker  # type: ignore
 
-from . state import Icond, ShutdownEvent
+from . events import ShutdownEvent
+from . state import Icond
 from . message import (IconMessage, InvalidMessage, JSONReader, JSONWriter)
 from . import message
 from . eventqueue import GlobalEventQueue, Subscription
