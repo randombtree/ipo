@@ -20,6 +20,7 @@ from . import message
 from . eventqueue import GlobalEventQueue, Subscription
 from . ctltask import CTL_HANDLERS, MessageTaskHandler
 from . asynctask import AsyncTask, AsyncTaskRunner, waitany
+from . signals import set_signal_handlers
 
 
 ICOND_REPO = "icond_repository"   # ICON local repository
@@ -243,6 +244,7 @@ async def main():
     ctl_server_task = asyncio.create_task(iconctl_server(icond),
                                           name = "ctl_server")
 
+    set_signal_handlers(icond)
     with icond.subscribe_event(ShutdownEvent) as shutdown_event:
         shutdown_task = asyncio.create_task(shutdown_event.get())
         (done, _pending) = await waitany({shutdown_task, ctl_server_task})
