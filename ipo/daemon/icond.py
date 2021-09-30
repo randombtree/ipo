@@ -23,10 +23,6 @@ from . asynctask import AsyncTask, AsyncTaskRunner, waitany
 from . signals import set_signal_handlers
 
 
-ICOND_REPO = "icond_repository"   # ICON local repository
-ICOND_CTL_SOCK = "/var/run/icond/icond.sock"   # ICON control socket
-
-
 async def iconctl_connection_handler(reader, writer, icond: Icond):
     """ Icon control channel handler """
     reader = JSONReader(reader)
@@ -144,16 +140,16 @@ class RPCHandler:
 
 async def iconctl_server(icond: Icond):
     """ ICON control channel server """
-    os.makedirs(os.path.dirname(ICOND_CTL_SOCK), exist_ok = True)
+    control_socket = icond.config.control_socket
     try:
-        os.unlink(ICOND_CTL_SOCK)
+        os.unlink(control_socket)
     except OSError:
-        if os.path.exists(ICOND_CTL_SOCK):
+        if os.path.exists(control_socket):
             raise
 
     server = await asyncio.start_unix_server(
         iconctl_connection_factory(icond),
-        path = ICOND_CTL_SOCK
+        path = control_socket
     )
     async with server:
         await server.serve_forever()
@@ -167,8 +163,9 @@ class InitializationException(Exception):
 async def init_repository(icond: Icond):
     print("Initializing repository..")
     # Repository
+    repository = icond.config.repository
     try:
-        repo = await icond.docker.containers.get(ICOND_REPO)
+        repo = await icond.docker.containers.get(repository)
         if repo.status != "running":
             print(f"ICON repository was not running ({repo.status}), starting it..")
             await repo.start()
@@ -180,7 +177,7 @@ async def init_repository(icond: Icond):
         print("Creating ICON local repository..")
         await icond.docker.containers.run(
             "registry:2",
-            name=ICOND_REPO,
+            name=repository,
             detach=True,
             restart_policy={"name": "always"},
             ports={"5000/tcp": 5000}       # TODO: Config
@@ -195,6 +192,7 @@ async def init_repository(icond: Icond):
 async def main():
     """ Icond daemon """
     icond = Icond()
+    os.makedirs(os.path.dirname(icond.config.run_directory), exist_ok = True)
 
     await init_repository(icond)
     print("Starting server")

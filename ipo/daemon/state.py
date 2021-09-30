@@ -5,6 +5,7 @@ from . asyncdocker import AsyncDockerClient
 
 from . events import ShutdownEvent
 from . eventqueue import GlobalEventQueue, Subscription
+from . config import DaemonConfig
 
 
 class Icond:
@@ -12,11 +13,13 @@ class Icond:
     docker: AsyncDockerClient
     shutdown: bool
     eventqueue: GlobalEventQueue
+    config: DaemonConfig
 
     def __init__(self):
         self.docker = AsyncDockerClient(base_url='unix://var/run/docker.sock')
         self.shutdown = False
         self.eventqueue = GlobalEventQueue()
+        self.config = DaemonConfig()
 
     def do_shutdown(self):
         """ Shutdown daemon commanded """
