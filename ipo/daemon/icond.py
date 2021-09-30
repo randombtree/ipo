@@ -164,21 +164,21 @@ class InitializationException(Exception):
     ...
 
 
-def init_repository(icond: Icond):
+async def init_repository(icond: Icond):
     print("Initializing repository..")
     # Repository
     try:
-        repo = icond.docker.containers.get(ICOND_REPO)
+        repo = await icond.docker.containers.get(ICOND_REPO)
         if repo.status != "running":
             print(f"ICON repository was not running ({repo.status}), starting it..")
-            repo.start()
+            await repo.start()
         else:
             print("ICON repository ok")
     except docker.errors.NotFound:
         # First run; create repository
         # TODO: separate init from normal daemon run
         print("Creating ICON local repository..")
-        icond.docker.containers.run(
+        await icond.docker.containers.run(
             "registry:2",
             name=ICOND_REPO,
             detach=True,
@@ -196,7 +196,7 @@ async def main():
     """ Icond daemon """
     icond = Icond()
 
-    init_repository(icond)
+    await init_repository(icond)
     print("Starting server")
     # Start the control channel server
     ctl_server_task = asyncio.create_task(iconctl_server(icond),

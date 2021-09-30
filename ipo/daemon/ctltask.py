@@ -65,7 +65,7 @@ class ContainerRunTask(MessageTaskHandler):
         # Docker commands are synchronous, so some
         # threading will be needed here (e.g. loop.run_in_executor()); doing some bad blocking
         try:
-            docker_image = self.icond.docker.images.get(image)
+            docker_image = await self.icond.docker.images.get(image)
             print(docker_image)
             reply_msg = msg.create_reply(msg = 'Working..')
         except docker.errors.ImageNotFound:
