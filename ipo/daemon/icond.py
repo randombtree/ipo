@@ -142,48 +142,6 @@ class RPCHandler:
         return IconMessage(msg_type, self.stream_id, **contents)
 
 
-class OneShotRPCHandler(RPCHandler):
-    """ Simple RPC handler that only returns a message """
-    def handle(self, msg: IconMessage) -> IconMessage:
-        pass
-
-
-class StreamRPCHandler(RPCHandler):
-    """ Persistent RPC handler that will exchange several messages with the same ID """
-    RPC_NAME = "undefined"
-    task: Union[None, asyncio.tasks.Task]
-    in_queue: asyncio.Queue
-    out_queue: asyncio.Queue
-
-    def __init__(self, stream_id: uuid.UUID, out_queue: asyncio.Queue):
-        super().__init__(stream_id)
-        self.out_queue = out_queue
-        self.in_queue = asyncio.Queue()
-        self.task = None
-
-    def start(self) -> asyncio.tasks.Task:
-        """
-        Start the RPC handler; this involves running the run method as a task
-
-        Returns the task for the caller to wait on.
-        """
-        self.task =  asyncio.create_task(self.run(), name = f"rpchandler-{self.RPC_NAME}")
-        return self.task
-
-    def put(self, item):
-        """
-        Put an item to the tasks processing queue - this most probably is a message.
-        """
-        try:
-            self.in_queue.put_nowait(item)
-        except asyncio.QueueFull:
-            # Task has failed somehow, kill it
-            self.task.cancel("Task couldn't keep up with the messages")
-
-    async def run(self):
-        """ Async method to run as part of the handler """
-
-
 async def iconctl_server(icond: Icond):
     """ ICON control channel server """
     os.makedirs(os.path.dirname(ICOND_CTL_SOCK), exist_ok = True)
