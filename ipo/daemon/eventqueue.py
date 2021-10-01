@@ -1,4 +1,5 @@
 """ Global async event queue """
+from weakref import WeakSet
 import asyncio
 from asyncio import Queue
 
@@ -40,7 +41,7 @@ class GlobalEventQueue:
     """
     Event dispatcher, subscription handler.
     """
-    queues: dict[type, set]
+    queues: dict[type, WeakSet]
 
     def __init__(self):
         self.queues = dict()
@@ -61,10 +62,14 @@ class GlobalEventQueue:
         """ Subscribe to event type """
         return Subscription(self, cls)
 
+    def listen(self, cls: type, target: Queue):
+        """ Subscribe to event and deliver the events to target """
+        self._addListener(cls, target)
+
     def _addListener(self, channel: type, queue: Queue):
         """ Subscription helper to add listener """
         if channel not in self.queues:
-            self.queues[channel] = set()
+            self.queues[channel] = WeakSet()
         self.queues[channel].add(queue)
 
     def _delListener(self, channel: type, queue: Queue):
