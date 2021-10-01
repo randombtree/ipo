@@ -6,10 +6,7 @@ import sys
 import asyncio
 import os
 import json
-import uuid
 import argparse
-from typing import Union, Any
-from collections.abc import Callable
 
 import docker  # type: ignore
 
@@ -127,16 +124,6 @@ def iconctl_connection_factory(icond: Icond):
     return connection_handler
 
 
-class RPCHandler:
-    """ RPC command handler base class """
-    def __init__(self, stream_id: uuid.UUID):
-        self.stream_id = stream_id
-
-    def generate_message(self, msg_type: str, **contents):
-        """ Generate a message with current ID attached """
-        return IconMessage(msg_type, self.stream_id, **contents)
-
-
 async def iconctl_server(icond: Icond):
     """ ICON control channel server """
     control_socket = icond.config.control_socket
@@ -160,6 +147,7 @@ class InitializationException(Exception):
 
 
 async def init_repository(icond: Icond):
+    """ Initialize the docker repository (registry) """
     print("Initializing repository..")
     # Repository
     repository = icond.config.repository
