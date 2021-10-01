@@ -1,7 +1,7 @@
-""" Global async event queue """
+""" Async event queue """
 from weakref import WeakSet
-import asyncio
 from asyncio import Queue
+
 
 class Subscription:
     """
@@ -10,11 +10,11 @@ class Subscription:
     The subscription is only valid inside a context that uses it - e.g.
     events can be missed outside the context (e.g. the with statement).
     """
-    event_queue: 'GlobalEventQueue'
+    event_queue: 'EventQueue'
     queue: Queue
     channel: type
 
-    def __init__(self, event_queue: 'GlobalEventQueue', channel: type):
+    def __init__(self, event_queue: 'EventQueue', channel: type):
         assert event_queue is not None
 
         self.event_queue = event_queue
@@ -37,7 +37,7 @@ class Subscription:
                 qset.remove(self.queue)
 
 
-class GlobalEventQueue:
+class EventQueue:
     """
     Event dispatcher, subscription handler.
     """

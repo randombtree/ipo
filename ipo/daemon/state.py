@@ -4,7 +4,7 @@ ICOND global state
 from . asyncdocker import AsyncDockerClient
 
 from . events import ShutdownEvent
-from . eventqueue import GlobalEventQueue, Subscription
+from . eventqueue import EventQueue, Subscription
 from . config import DaemonConfig
 
 
@@ -12,13 +12,13 @@ class Icond:
     """ Icond global state """
     docker: AsyncDockerClient
     shutdown: bool
-    eventqueue: GlobalEventQueue
+    eventqueue: EventQueue
     config: DaemonConfig
 
     def __init__(self):
         self.docker = AsyncDockerClient(base_url='unix://var/run/docker.sock')
         self.shutdown = False
-        self.eventqueue = GlobalEventQueue()
+        self.eventqueue = EventQueue()
         self.config = DaemonConfig()
 
     def do_shutdown(self):

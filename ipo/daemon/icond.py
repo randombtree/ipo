@@ -17,7 +17,6 @@ from . events import ShutdownEvent
 from . state import Icond
 from . message import (IconMessage, InvalidMessage, JSONReader, JSONWriter)
 from . import message
-from . eventqueue import GlobalEventQueue, Subscription
 from . ctltask import CTL_HANDLERS, MessageTaskHandler
 from . asynctask import AsyncTask, AsyncTaskRunner, waitany
 from . signals import set_signal_handlers
