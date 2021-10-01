@@ -45,13 +45,13 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
     with icond.subscribe_event(ShutdownEvent) as shutdown_event:
         # The shutdown message helps us to tear down the connection
         # while waiting for peer actions (i.e. reading, writing)
-        shutdown_task = AsyncTask(lambda: asyncio.create_task(shutdown_event.get()), restartable = False)
+        shutdown_task = AsyncTask(shutdown_event.get, restartable = False)
         asyncrunner.start_task(shutdown_task)
         # The reader is always active to receive new messages
-        read_task = AsyncTask(lambda: asyncio.create_task(reader.read()))
+        read_task = AsyncTask(reader.read)
         asyncrunner.start_task(read_task)
 
-        flush_task = AsyncTask(lambda: asyncio.create_task(outqueue_flusher()), restartable = False)
+        flush_task = AsyncTask(outqueue_flusher, restartable = False)
         asyncrunner.start_task(flush_task)
         while not icond.shutdown:
             completed = await asyncrunner.waitany()

@@ -1,7 +1,9 @@
 """ Async Task tracking and waiting capabilities """
 import asyncio
 from asyncio import Future, Task
-from typing import Any, Set, Protocol
+from typing import Any, Set, Protocol, Union, Callable, cast
+from collections.abc import Awaitable
+from inspect import iscoroutinefunction
 
 
 async def waitany(tset: Set[Future[Any]]) -> tuple[Set[Future[Any]], Set[Future[Any]]]:
@@ -16,6 +18,9 @@ class AsyncFctryProtocol(Protocol):
         ...
 
 
+CoroutineFunc = Callable[[], Awaitable]  # Typing for an async function pointer (i.e. async def ...)
+
+
 class AsyncTask:
     """
     Wrapper around some async task to be run in the AsyncTaskRunner
@@ -23,12 +28,21 @@ class AsyncTask:
     fctry: AsyncFctryProtocol
     _restartable: bool
 
-    def __init__(self, fctry: AsyncFctryProtocol, restartable: bool = True):
+    def __init__(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc], restartable: bool = True):
         """
-        fctry: The factory method that creates an async task to wait for.
-        restartable: If set to false the factory method will run only once.
+        fctry: The factory method that creates an async task to wait for. It can also be an async
+               function in which case it will be run inside a task.
+        restartable: If set to false the factory method will run only once (and be removed once
+                     ready).
         """
-        self.fctry = fctry
+        if iscoroutinefunction(fctry):
+            coroutine: CoroutineFunc = fctry   # To make type checking happy
+
+            def task_fctry() -> Task:
+                return asyncio.create_task(coroutine())
+
+            fctry = task_fctry
+        self.fctry =  cast(AsyncFctryProtocol, fctry)  # fctry is now guaranteed to be a function
         self._restartable = restartable
         self._asynctask = None
 
