@@ -1,4 +1,5 @@
 """ Async event queue """
+from typing import Union
 from weakref import WeakSet
 from asyncio import Queue
 
@@ -62,9 +63,13 @@ class EventQueue:
         """ Subscribe to event type """
         return Subscription(self, cls)
 
-    def listen(self, cls: type, target: Queue):
+    def listen(self, klasses: Union[type, list[type]], target: Queue):
         """ Subscribe to event and deliver the events to target """
-        self._addListener(cls, target)
+        if not isinstance(klasses, list):
+            klasses = [klasses]
+
+        for cls in klasses:
+            self._addListener(cls, target)
 
     def _addListener(self, channel: type, queue: Queue):
         """ Subscription helper to add listener """
