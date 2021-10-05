@@ -1,14 +1,29 @@
 """ Async Task tracking and waiting capabilities """
 import asyncio
-from asyncio import Future, Task
-from typing import Any, Set, Protocol, Union, Callable, cast
+from asyncio import Task
+from typing import (
+    Set,
+    Protocol,
+    Union,
+    Callable,
+    cast,
+    AsyncGenerator
+)
 from collections.abc import Awaitable
 from inspect import iscoroutinefunction
 
 
-async def waitany(tset: Set[Future[Any]]) -> tuple[Set[Future[Any]], Set[Future[Any]]]:
+# async def waitany(tset: Set[Future[Any]]) -> tuple[Set[Future[Any]], Set[Future[Any]]]:
+#     """ Convinience function to wait for any async task completion """
+#     return await asyncio.wait(tset, return_when = asyncio.FIRST_COMPLETED)
+
+WaitSet = tuple[Set[Task], Set[Task]]  # Set returned from waitany
+
+
+async def waitany(tset: Set[Task]) -> WaitSet:
     """ Convinience function to wait for any async task completion """
-    return await asyncio.wait(tset, return_when = asyncio.FIRST_COMPLETED)
+    ret = await asyncio.wait(tset, return_when = asyncio.FIRST_COMPLETED)
+    return cast(WaitSet, ret)  # We only take in Task:s so this is safe
 
 
 class AsyncFctryProtocol(Protocol):
@@ -27,6 +42,7 @@ class AsyncTask:
     """
     fctry: AsyncFctryProtocol
     _restartable: bool
+    _asynctask: Union[Task, None]
 
     def __init__(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc], restartable: bool = True):
         """
@@ -81,17 +97,26 @@ class AsyncTaskRunner:
     """
     Manager of a set of tasks that have differing run-lengths.
     """
-    active: dict[Future[Any], AsyncTask]
-    completed: Set[Future[Any]]
+    active: dict[Task, AsyncTask]
+    completed: Set[Task]
+    waiting: bool
+    wakeup: asyncio.Queue
+    wtask: AsyncTask
 
     def __init__(self):
         self.active = dict()    # Currently running (or completed) tasks
         self.completed = set()  # Previously completed asynctasks
+        self.waiting = False    # When the task is waiting
+        self.wakeup = asyncio.Queue()  # Wakeup queue
+        self.wtask = AsyncTask(self.wakeup.get)
+        self.start_task(self.wtask)
 
     def start_task(self, task: AsyncTask):
         """ Add and start the task """
         asynctask = task.start()
         self.active[asynctask] = task
+        # Wakeup waiting task if done from other async task
+        self._maybe_wakeup()
 
     def remove_task(self, task: AsyncTask):
         """ Remove a task from the runner. If it's still active it will be canceled """
@@ -106,9 +131,34 @@ class AsyncTaskRunner:
             del self.active[asynctask]
             if not (asynctask.done() or asynctask.cancelled()):
                 asynctask.cancel()
+        self._maybe_wakeup()
+
+    def _maybe_wakeup(self):
+        """ Wakeup waiter if needed """
+        if self.waiting:
+            self.wakeup.put_nowait(object())
+
+    async def wait_next(self) -> AsyncGenerator[AsyncTask, None]:
+        """ Async generator for waiting for the next completed task """
+        while True:
+            tasks = await self.waitany()
+            for t in tasks:
+                yield t
 
     async def waitany(self) -> Set[AsyncTask]:
         """ Wait for any completed tasks, returns list of AsyncTasks that completed """
+        while True:
+            tasks = await self._waitany()
+            # Need to remove dummy wakeup task if it happens
+            if self.wtask in tasks:
+                self.wakeup.task_done()
+                tasks.remove(self.wtask)
+            # It might've been only the wakeup task
+            if len(tasks) > 0:
+                return tasks
+
+    async def _waitany(self) -> Set[AsyncTask]:
+        """ Internal wait implementation """
         # Re-arm tasks that completed last round
         # We don't re-arm them earlier as to allow
         # smoother removals of tasks
@@ -121,7 +171,24 @@ class AsyncTaskRunner:
                     asynctask = task.start()
                     self.active[asynctask] = task
                 # one-shot tasks won't get re-added, thus will disappear
-        # Wait
+        self.waiting = True
         done, _pending = await waitany(set(self.active.keys()))
+        self.waiting = False
         self.completed = done
+        # Print some exceptions if builtin exceptions happen
+        # which usually should be for bugs
+        AsyncTaskRunner._print_exceptions(done)
+
         return set(self.active[t] for t in done)
+
+    @staticmethod
+    def _print_exceptions(tasks: set[Task]):
+        """
+        Print exceptions and stack traces of Task:s that had builtin exceptions.
+        Builtin exceptions should mostly be caused by syntax/semantic errors.
+        """
+        for task in tasks:
+            e = task.exception()
+            if e and e.__class__.__module__ == 'builtins':
+                print(f'Task {task} threw an exception {e}')
+                task.print_stack()
