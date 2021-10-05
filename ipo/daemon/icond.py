@@ -204,4 +204,5 @@ def start(params : argparse.Namespace):
         print("Try --force if you are confident it will work")
         sys.exit(-1)
 
+    logging.getLogger("asyncio").setLevel(logging.DEBUG)
     asyncio.run(main())
