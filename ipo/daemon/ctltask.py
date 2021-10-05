@@ -6,10 +6,17 @@ from typing import Union
 
 import docker
 
-from . events import ShutdownEvent, MessageEvent
+from . events import (
+    ShutdownEvent,
+    MessageEvent,
+    ContainerRunningEvent,
+    ContainerFailedEvent
+)
+
 from . state import Icond
 from . message import IconMessage
 from . import message
+from . container import ContainerState
 
 
 class MessageTaskHandler:
@@ -68,6 +75,18 @@ class ContainerRunTask(MessageTaskHandler):
             docker_image = await self.icond.docker.images.get(image)
             print(docker_image)
             reply_msg = msg.create_reply(msg = 'Working..')
+            wakeup = Queue()
+            self.icond.eventqueue.listen([
+                ContainerRunningEvent,
+                ContainerFailedEvent,
+            ], wakeup)
+            container = await self.icond.cmgr.run_container(image)
+            while container.state != ContainerState.RUNNING:
+                ev = await wakeup.get()
+                wakeup.task_done()
+                if isinstance(ev, ContainerRunningEvent) and ev.container == container:
+                    print(f'Container {image} successfully started')
+                    break
         except docker.errors.ImageNotFound:
             reply_msg = IconMessage(IconMessage.TYPE_ERROR, msg_id = msg.msg_id, msg = 'Image not found')
 
