@@ -56,6 +56,9 @@ class AsyncDockerWrapper:
             if attr is not None:
                 self.wrap_cache[attr] = wrapper
             return wrapper
+        if isinstance(obj, list):
+            # Some, e.g. containers.list return a list of containers, make sure the content is wrapped
+            return map(self.maybe_wrap, obj)
         return obj
 
 
