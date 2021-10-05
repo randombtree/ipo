@@ -13,10 +13,6 @@ from collections.abc import Awaitable
 from inspect import iscoroutinefunction
 
 
-# async def waitany(tset: Set[Future[Any]]) -> tuple[Set[Future[Any]], Set[Future[Any]]]:
-#     """ Convinience function to wait for any async task completion """
-#     return await asyncio.wait(tset, return_when = asyncio.FIRST_COMPLETED)
-
 WaitSet = tuple[Set[Task], Set[Task]]  # Set returned from waitany
 
 

@@ -183,20 +183,39 @@ async def main():
 
     await init_repository(icond)
     print("Starting server")
-    # Start the control channel server
+
     ctl_server_task = asyncio.create_task(iconctl_server(icond),
                                           name = "ctl_server")
+    cmgr_task = icond.cmgr.start()
 
     set_signal_handlers(icond)
     with icond.subscribe_event(ShutdownEvent) as shutdown_event:
+        print('Server started')
         shutdown_task = asyncio.create_task(shutdown_event.get())
-        (done, _pending) = await waitany({shutdown_task, ctl_server_task})
+        (done, _pending) = await waitany({
+            shutdown_task,
+            ctl_server_task,
+            cmgr_task,
+        })
+        for task in done:
+            e = task.exception()
+            if e:
+                print(f'There was an exception in the daemon: {e}')
+                task.print_stack()
         # Any task finishing indicates that we want to exit, either due to some internal
         # error or a shutdown event
         if shutdown_task in done:
             print("Shutdown signaled")
 
+        # Graceful shutdown for cmgr
+        if cmgr_task not in done:
+            print('Waiting for tasks to shut down..')
+            # FIXME: This could take a lot of time, some way to ensure that progress is made
+            #        should probalby be added instead of using timeouts
+            await asyncio.wait({cmgr_task}, timeout = 60)
 
+
+import logging
 def start(params : argparse.Namespace):
     """ Entry point for module run """
     if not (params.force or os.geteuid() == 0):
