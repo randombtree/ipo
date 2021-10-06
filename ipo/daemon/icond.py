@@ -7,6 +7,7 @@ import asyncio
 import os
 import json
 import argparse
+import logging
 
 import docker  # type: ignore
 
@@ -220,7 +221,7 @@ async def main():
     # Also, leaving docker session open will spew warnings
     await icond.docker.close()
 
-import logging
+
 def start(params : argparse.Namespace):
     """ Entry point for module run """
     if not (params.force or os.geteuid() == 0):
