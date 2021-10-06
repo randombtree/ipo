@@ -214,6 +214,11 @@ async def main():
             #        should probalby be added instead of using timeouts
             await asyncio.wait({cmgr_task}, timeout = 60)
 
+    # Shut down control socket, to avoid spewing a lot of resource warnings when debugging
+    ctl_server_task.cancel()
+    await asyncio.wait({ctl_server_task}, timeout = 60)
+    # Also, leaving docker session open will spew warnings
+    await icond.docker.close()
 
 import logging
 def start(params : argparse.Namespace):
