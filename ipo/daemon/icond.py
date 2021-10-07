@@ -100,7 +100,7 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
 
                 except (json.JSONDecodeError, InvalidMessage) as e:
                     print(f'Invalid message: {e.msg}')
-                    reply_msg = IconMessage(IconMessage.TYPE_ERROR, "connection", msg = e.msg)
+                    reply_msg = message.Error(msg = e.msg)
                     await outqueue.put(reply_msg)
 
             # A task handler finished?

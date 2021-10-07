@@ -3,6 +3,9 @@ import uuid
 import json
 import asyncio
 from typing import Union
+from collections.abc import Callable
+
+# pylint: disable=too-few-public-methods
 
 
 class JSONReader:
@@ -18,45 +21,61 @@ class JSONReader:
 
 class InvalidMessage(Exception):
     """ Message is invalid somehow """
+    ...
 
 
-class IconMessage:
-    """ Icon Control message """
-    # Common fields (dictionary keys) used in messages
-    FIELD_ID      = "id"
-    FIELD_TYPE    = "type"
-    FIELD_COMMAND = "command"
+class MessageTypeNotFoundException(Exception):
+    """ Message type is invalid/not implemented """
+    ...
 
-    # FIELD_TYPE can be one of the following:
-    TYPE_COMMAND = "command"
-    TYPE_REPLY = "reply"
-    TYPE_ERROR = "error"
 
-    # FIELD_COMMAND can me one of the following (when appropriable)
-    COMMAND_SHUTDOWN = "shutdown"
-    COMMAND_CONTAINER_RUN = 'container run'
+class MessageRegistry(type):
+    """ Meta class that keeps track of all registered messages """
+    registered = dict()  # type: dict[str, type]   #Register all classes here
 
-    def __init__(self, msg_type: str = TYPE_COMMAND, msg_id = None, **data):
-        """
-        msg_type: The message type
-        msg_id: A message ID to use (in reply messages), othervise assign a new unique id.
-        data: The rest of the message fields.
-        """
+    def __new__(cls, name, bases, attrs):
+        # create the new type
+        newtype = super(MessageRegistry, cls).__new__(cls, name, bases, attrs)
+        # store it
+        cls.registered[name] = newtype
+        return newtype
 
-        self.msg_type = msg_type
-        # Allow msg_id to be supplied from the data; this usually helps when de-serializing data
-        if msg_id is None and self.FIELD_ID in data:
-            msg_id = data[self.FIELD_ID]
-        # create uuid from different types; n.b. UUID objects are immutable
+    @classmethod
+    def get_message_class(cls, name):
+        """ Get the message class for name """
+        if name in cls.registered:
+            return cls.registered[name]
+        raise MessageTypeNotFoundException(f'{name} is not a valid message')
+
+
+class IconMessage(metaclass = MessageRegistry):
+    """ Icon message base / Factory """
+    # Avoid using naked string literals for message fields
+    STR_ID      = "id"
+    STR_TYPE    = "type"
+
+    FIELD_VALIDATORS = dict()  # type: dict[str, Union[None, Callable[[str], bool]]]
+
+    data: dict[str, str]
+    msg_id: uuid.UUID
+
+    def __init__(self, /, msg_id = None, **data):
+        self.data = data.copy()
+
         self.msg_id = \
             uuid.UUID(msg_id) if isinstance(msg_id, str) \
             else uuid.UUID(msg_id['id']) if isinstance(msg_id, dict) \
             else msg_id if isinstance(msg_id, uuid.UUID) \
             else uuid.uuid4()  # Swallow erronous msg_id here for simplicity
-        self.data = data.copy()
-        # Don't carry these in data
-        for k in [self.FIELD_TYPE, self.FIELD_ID]:
-            self.data.pop(k, None)
+
+        # Validate fields
+        for field, validator in self.FIELD_VALIDATORS.items():
+            clsname = self.__class__.__name__
+            if field not in self.data:
+                raise InvalidMessage(f'{clsname} requires field {field}')
+            value = self.data[field]
+            if validator is not None and not validator(value):
+                raise InvalidMessage(f'{clsname} field {field} of invalid value {value}')
 
     def __getitem__(self, key):
         return self.data[key]
@@ -73,8 +92,8 @@ class IconMessage:
     def as_dict(self):
         """ Output message as dict data, for later feeding to json """
         d = {
-            self.FIELD_TYPE: self.msg_type,
-            self.FIELD_ID: str(self.msg_id),
+            self.STR_TYPE: self.__class__.__name__,
+            self.STR_ID: str(self.msg_id),
             **self.data
         }
         return d
@@ -85,47 +104,41 @@ class IconMessage:
 
     @classmethod
     def from_dict(cls, source: dict) -> 'IconMessage':
-        """ Re-construct message from dictionary data """
-        if not (cls.FIELD_TYPE in source and cls.FIELD_ID in source):
+        """ De-serialize class from dict """
+        if not (cls.STR_TYPE in source and cls.STR_ID in source):
             raise InvalidMessage("missing in message: %s %s" % (
-                                 "type " if not cls.FIELD_TYPE else "",
-                                 "id " if not cls.FIELD_ID else ""))
-        msg_type = source.pop(cls.FIELD_TYPE)
-        msg_id = source.pop(cls.FIELD_ID)
-        # Parse convinience classes
-        if msg_type == cls.TYPE_COMMAND:
-            msg_command = source.pop(cls.FIELD_COMMAND)
-            msg_cls = \
-                Shutdown if msg_command == cls.COMMAND_SHUTDOWN \
-                else ContainerRun if msg_command == cls.COMMAND_CONTAINER_RUN \
-                else None
-            if msg_cls is None:
-                raise InvalidMessage(f'Unhandled command {msg_command}')
-            return msg_cls(msg_id = msg_id, **source)
-        return IconMessage(msg_type, msg_id = msg_id, **source)
+                                 "type " if not cls.STR_TYPE else "",
+                                 "id " if not cls.STR_ID else ""))
 
-    def __str__(self):
-        return f'({self.msg_type}, {self.msg_id}) {self.data}'
+        msg_type = source.pop(cls.STR_TYPE)
+        msg_id = source.pop(cls.STR_ID)
+        try:
+            msg_cls = MessageRegistry.get_message_class(msg_type)
+        except MessageTypeNotFoundException as e:
+            raise InvalidMessage(f'Unknown message type {msg_type}') from e
+        return msg_cls(msg_id = msg_id, **source)
+
+
+class Error(IconMessage):
+    """ Error message """
+    FIELD_VALIDATORS = dict(msg = None)
+    ...
 
 
 class Shutdown(IconMessage):
-    """ Convinience class for a Shutdown message """
-    def __init__(self, **kvargs):
-        super().__init__(msg_type = IconMessage.TYPE_COMMAND, command = IconMessage.COMMAND_SHUTDOWN, **kvargs)
+    """ Shutdown message """
+    ...
+
 
 class ContainerRun(IconMessage):
-    ARG_IMAGE = 'image'
-    """ Container run command """
-    def __init__(self, **kvargs):
-        if ContainerRun.ARG_IMAGE not in kvargs:
-            raise InvalidMessage('missing image argument')
-        super().__init__(msg_type = IconMessage.TYPE_COMMAND, command = IconMessage.COMMAND_CONTAINER_RUN, **kvargs)
+    """ Run container message """
+    FIELD_VALIDATORS = dict(image = None)
+    ...
 
 
 class Reply(IconMessage):
-    """ Convinience class for a simple reply message """
-    def __init__(self, msg_id, **data):
-        super().__init__(msg_type = IconMessage.TYPE_REPLY, msg_id = msg_id, **data)
+    """ Reply message """
+    ...
 
 
 class JSONWriter:

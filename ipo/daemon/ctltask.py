@@ -88,7 +88,7 @@ class ContainerRunTask(MessageTaskHandler):
                     print(f'Container {image} successfully started')
                     break
         except docker.errors.ImageNotFound:
-            reply_msg = IconMessage(IconMessage.TYPE_ERROR, msg_id = msg.msg_id, msg = 'Image not found')
+            reply_msg = message.Error(msg_id = msg.msg_id, msg = 'Image not found')
 
         await self.outqueue.put(reply_msg)
         await self.outqueue.join()   # Wait until message is sent
