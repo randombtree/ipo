@@ -55,6 +55,7 @@ class IconMessage(metaclass = MessageRegistry):
     STR_TYPE    = "type"
 
     FIELD_VALIDATORS = dict()  # type: dict[str, Union[None, Callable[[str], bool]]]
+    REPLY_CLS = 'Reply'        # type: Union[None, str, type]  # Create a reply message using this class
 
     data: dict[str, str]
     msg_id: uuid.UUID
@@ -100,7 +101,10 @@ class IconMessage(metaclass = MessageRegistry):
 
     def create_reply(self, **data) -> 'Reply':
         """ Create a reply message based on this message (i.e. copy id) """
-        return Reply(msg_id = self.msg_id, **data)
+        # NB: Will throw is self hasn't got a reply class
+        reply_cls = self.REPLY_CLS if isinstance(self.REPLY_CLS, type) \
+            else MessageRegistry.get_message_class(self.REPLY_CLS)
+        return reply_cls(msg_id = self.msg_id, **data)
 
     @classmethod
     def from_dict(cls, source: dict) -> 'IconMessage':
@@ -119,25 +123,31 @@ class IconMessage(metaclass = MessageRegistry):
         return msg_cls(msg_id = msg_id, **source)
 
 
-class Error(IconMessage):
-    """ Error message """
+class Reply(IconMessage):
+    """ Reply message """
+    REPLY_CLS = None
+    ...
+
+
+class ReplyMsg(Reply):
+    """ Reply with obligatory message """
     FIELD_VALIDATORS = dict(msg = None)
+
+
+class Error(ReplyMsg):
+    """ Error message """
     ...
 
 
 class Shutdown(IconMessage):
     """ Shutdown message """
+    REPLY_CLS = ReplyMsg
     ...
 
 
 class ContainerRun(IconMessage):
     """ Run container message """
     FIELD_VALIDATORS = dict(image = None)
-    ...
-
-
-class Reply(IconMessage):
-    """ Reply message """
     ...
 
 
