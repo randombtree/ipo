@@ -88,6 +88,11 @@ class AsyncTask:
         assert self._asynctask.done()
         return self._asynctask.exception()
 
+    def cancel(self):
+        """ Cancel the underlying asyncio Task """
+        if self._asynctask is not None and not self._asynctask.done():
+            self._asynctask.cancel()
+
 
 class AsyncTaskRunner:
     """
@@ -127,6 +132,14 @@ class AsyncTaskRunner:
             del self.active[asynctask]
             if not (asynctask.done() or asynctask.cancelled()):
                 asynctask.cancel()
+        self._maybe_wakeup()
+
+    def clear(self, cancel = True):
+        """ Clear all Tasks and cancel them """
+        if cancel:
+            for task in self.active.values():
+                task.cancel()
+        self.active.clear()
         self._maybe_wakeup()
 
     def _maybe_wakeup(self):
