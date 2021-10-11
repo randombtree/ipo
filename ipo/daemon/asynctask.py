@@ -119,6 +119,15 @@ class AsyncTaskRunner:
         # Wakeup waiting task if done from other async task
         self._maybe_wakeup()
 
+    def run(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc], restartable: bool = True) -> AsyncTask:
+        """
+        Create an async task for the async method or factory and run it.
+        This is equivalent to creating an AsyncTask and then starting it.
+        """
+        task = AsyncTask(fctry, restartable)
+        self.start_task(task)
+        return task
+
     def remove_task(self, task: AsyncTask):
         """ Remove a task from the runner. If it's still active it will be canceled """
         asynctask = task.asynctask
