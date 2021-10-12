@@ -2,9 +2,9 @@
 import asyncio
 from asyncio import Queue
 
-from typing import Union
+from typing import Union, Type
 
-import docker
+import docker  # type: ignore
 
 from . events import (
     ShutdownEvent,
@@ -98,4 +98,4 @@ class ContainerRunTask(MessageTaskHandler):
 # Message -> Handler
 CTL_HANDLERS = {
     message.ContainerRun: ContainerRunTask,
-}
+}  # type: dict[Type[message.IconMessage], Type[MessageTaskHandler]]

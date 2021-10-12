@@ -1,9 +1,12 @@
 """
 Helpers for communicating commands to the daemon
 """
-from .connection import Connection
 import asyncio
+from typing import Union
+
+from .connection import Connection
 from .daemon import message
+
 
 def send_and_receive(msg: message.IconMessage, mask_exceptions = True):
     """
@@ -15,7 +18,7 @@ def send_and_receive(msg: message.IconMessage, mask_exceptions = True):
         conn = await Connection.connect()
         await conn.write(msg)
         return await conn.read()
-    exc = None
+    exc = None  # type: Union[OSError, None]
     try:
         return asyncio.run(do_async())
     except PermissionError as e:

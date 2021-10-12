@@ -11,7 +11,8 @@ from . import cmd_daemon
 from . import cmd_misc
 from . import cmd_container
 
-SUBCOMMANDS=[cmd_daemon, cmd_misc, cmd_container]
+SUBCOMMANDS = [cmd_daemon, cmd_misc, cmd_container]
+
 
 def main():
     """

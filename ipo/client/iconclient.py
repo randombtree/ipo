@@ -1,15 +1,16 @@
 """ ICON client """
 from enum import Enum, auto
 import asyncio
-from asyncio import Task, Queue, CancelledError
+from asyncio import Task, Queue
 import json
 
 from typing import Union
 
-from ..util.asynctask import AsyncTask, AsyncTaskRunner
+from ..util.asynctask import AsyncTaskRunner
 from ..util.signal import Signal, Emitter
 from ..daemon import message
 from ..daemon.message import MessageReader, JSONWriter
+
 
 class ShutdownEvent:
     ...

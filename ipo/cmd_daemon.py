@@ -42,19 +42,19 @@ def stop_daemon(namespace: argparse.Namespace):
         print(f'Error {e} when communicating with daemon')
 
 
-def add_subcommand(parser: argparsehelper.AddParser):
+def add_subcommand(subparser: argparsehelper.AddParser):
     """
     Add subcommand details to a subparser.
 
     NB.: No typing here as the subparser isn't oficially tied to a specific class and might be
     subject to changes, although the current implementation uses _SubParserAction.
     """
-    parser = parser.add_parser('daemon', help = 'Control the ICON daemon')
+    parser = subparser.add_parser('daemon', help = 'Control the ICON daemon')
 
-    parser = parser.add_subparsers(dest = 'action', required = True)
-    start = parser.add_parser('start', help = 'Start the ICON daemon')
+    action = parser.add_subparsers(dest = 'action', required = True)
+    start = action.add_parser('start', help = 'Start the ICON daemon')
     start.set_defaults(func = start_daemon)   # 'Hack' to give a callpoint for main parser
     start.add_argument('--force', default = False, action = 'store_true')   # Force starting, omitting checks..
 
-    stop = parser.add_parser('stop', help = 'Stop the ICON daemon')
+    stop = action.add_parser('stop', help = 'Stop the ICON daemon')
     stop.set_defaults(func = stop_daemon)

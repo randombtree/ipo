@@ -27,7 +27,7 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
     msg_handlers = dict()  # type: dict[str, MessageTaskHandler]  # msg_id -> TaskObject
     msg_tasks    = dict()  # type: dict[AsyncTask, str]           # task -> msg_id
     asyncrunner = AsyncTaskRunner()
-    outqueue = asyncio.Queue()     # Messages queued for transfer
+    outqueue = asyncio.Queue()  # type: asyncio.Queue   # Messages queued for transfer
 
     async def outqueue_flusher():
         """
@@ -99,8 +99,8 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
                             print(f'Not handling message {msg}')
 
                 except (json.JSONDecodeError, InvalidMessage) as e:
-                    print(f'Invalid message: {e.msg}')
-                    reply_msg = message.Error(msg = e.msg)
+                    print(f'Invalid message: {e}')
+                    reply_msg = message.Error(msg = str(e))
                     await outqueue.put(reply_msg)
 
             # A task handler finished?

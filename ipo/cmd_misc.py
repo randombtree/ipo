@@ -2,7 +2,6 @@
 Misc commands that might go away as development proceeds.
 
 """
-import sys
 import argparse
 from . import argparsehelper
 
@@ -22,12 +21,12 @@ def init_registry(namespace: argparse.Namespace) -> int:
         return 1
     return 0
 
+
 def client_connect(namespace: argparse.Namespace):
     """
     Testing ICON client connection
     """
     import asyncio
-    import os
     from .client.iconclient import IconClient
     from .daemon.config import DaemonConfig
 
@@ -50,17 +49,18 @@ def client_connect(namespace: argparse.Namespace):
 
     asyncio.run(client_loop())
 
-def add_subcommand(parser: argparsehelper.AddParser):
+
+def add_subcommand(subparser: argparsehelper.AddParser):
     """
     Add misc commands to ipo.
     """
 
-    parser = parser.add_parser('misc', help = 'Misc VOLATILE commands. Don\'t use outside IPO development as they will disappear!')
+    parser = subparser.add_parser('misc', help = 'Misc VOLATILE commands. Don\'t use outside IPO development as they will disappear!')
 
-    parser = parser.add_subparsers(dest = 'action', required = True)
-    reg = parser.add_parser('init_registry', help = 'Init local docker registry')
+    action = parser.add_subparsers(dest = 'action', required = True)
+    reg = action.add_parser('init_registry', help = 'Init local docker registry')
     reg.set_defaults(func = init_registry)
 
-    connect = parser.add_parser('connect', help = '(debug hack) Connect to daemon as icon client')
+    connect = action.add_parser('connect', help = '(debug hack) Connect to daemon as icon client')
     connect.set_defaults(func = client_connect)
     connect.add_argument('name')

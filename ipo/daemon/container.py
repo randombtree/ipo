@@ -5,11 +5,11 @@ Containers are run in docker, but the ICON orchestrator provides more services
 to them.
 """
 import asyncio
-from typing import Union
+from typing import Union, cast
 from enum import Enum
 import re
 import os.path
-import docker
+import docker  # type: ignore
 
 from . state import Icond
 from ..util.asynctask import AsyncTask, AsyncTaskRunner
@@ -38,6 +38,7 @@ class Container:
     container_name: str
     control_path: str         # Path to mount into container
     control_socket_path: str  # Container control socket name
+    socket_server: Union[asyncio.AbstractServer, None]
 
     def __init__(self, name: str, image: str, icond: Icond):
         """
@@ -79,7 +80,8 @@ class Container:
         else:
             # FIXME? Quirk to allow waiters on existing containers continue
             self.emit_state()
-        return self.task
+        assert self.task is not None
+        return cast(asyncio.Task, self.task)
 
     def is_running(self):
         """ Is the container in some kind of running state/starting up """
@@ -171,7 +173,7 @@ class ContainerManager:
     task_container: dict[AsyncTask, Container]
     icond: Icond
     task: Union[None, asyncio.Task]
-    inqueue: asyncio.Queue()   # Command queue
+    inqueue: asyncio.Queue     # Command queue
     task_runner: AsyncTaskRunner
 
     def __init__(self, icond: Icond):
