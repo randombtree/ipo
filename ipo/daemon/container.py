@@ -156,6 +156,8 @@ class Container:
             self.inqueue.get_nowait()
             self.inqueue.task_done()
         await container.stop()
+        # Make sure there aren't any weird left-overs for next run
+        self.task_runner.clear()
         self.state = ContainerState.STOPPED
         self.emit_state()
 
