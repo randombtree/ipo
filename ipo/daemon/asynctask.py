@@ -7,7 +7,8 @@ from typing import (
     Union,
     Callable,
     cast,
-    AsyncGenerator
+    AsyncGenerator,
+    Coroutine,
 )
 from collections.abc import Awaitable
 from inspect import iscoroutinefunction
@@ -40,14 +41,17 @@ class AsyncTask:
     _restartable: bool
     _asynctask: Union[Task, None]
 
-    def __init__(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc], restartable: bool = True):
+    def __init__(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc, Coroutine], restartable: bool = True):
         """
         fctry: The factory method that creates an async task to wait for. It can also be an async
                function in which case it will be run inside a task.
         restartable: If set to false the factory method will run only once (and be removed once
                      ready).
         """
-        if iscoroutinefunction(fctry):
+        if isinstance(fctry, Coroutine):
+            restartable = False  # Coroutines can't be re-started
+            fctry = self.coroutine_factory(cast(Coroutine, fctry))
+        elif iscoroutinefunction(fctry):
             coroutine: CoroutineFunc = fctry   # To make type checking happy
 
             def task_fctry() -> Task:
@@ -57,6 +61,13 @@ class AsyncTask:
         self.fctry =  cast(AsyncFctryProtocol, fctry)  # fctry is now guaranteed to be a function
         self._restartable = restartable
         self._asynctask = None
+
+    @staticmethod
+    def coroutine_factory(coroutine: Coroutine) -> AsyncFctryProtocol:
+        """ Create a Task factory for a coroutine """
+        def task_fctry() -> Task:
+            return asyncio.create_task(coroutine)
+        return task_fctry
 
     @property
     def restartable(self):
@@ -119,7 +130,7 @@ class AsyncTaskRunner:
         # Wakeup waiting task if done from other async task
         self._maybe_wakeup()
 
-    def run(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc], restartable: bool = True) -> AsyncTask:
+    def run(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc, Coroutine], restartable: bool = True) -> AsyncTask:
         """
         Create an async task for the async method or factory and run it.
         This is equivalent to creating an AsyncTask and then starting it.
