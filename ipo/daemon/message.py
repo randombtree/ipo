@@ -151,6 +151,19 @@ class ContainerRun(IconMessage):
     ...
 
 
+class HelloReply(IconMessage):
+    """ Reply message to *Hello """
+    FIELD_VALIDATORS = dict(version = None)
+    ...
+
+
+class ClientHello(IconMessage):
+    """ ICON container initialization message """
+    FIELD_VALIDATORS = dict(version = None)
+    REPLY_CLS = HelloReply
+    ...
+
+
 class JSONWriter:
     """ Simple JSON wrapper over StreamWriter """
     writer: asyncio.StreamWriter
