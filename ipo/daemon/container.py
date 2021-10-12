@@ -12,7 +12,7 @@ import os.path
 import docker
 
 from . state import Icond
-from . asynctask import AsyncTask, AsyncTaskRunner
+from ..util.asynctask import AsyncTask, AsyncTaskRunner
 from . events import (
     ShutdownEvent,
     ContainerRunningEvent,

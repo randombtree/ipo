@@ -6,7 +6,7 @@ import json
 
 from typing import Union
 
-from ..daemon.asynctask import AsyncTask, AsyncTaskRunner
+from ..util.asynctask import AsyncTask, AsyncTaskRunner
 from ..util.signal import Signal, Emitter
 from ..daemon import message
 from ..daemon.message import MessageReader, JSONWriter
