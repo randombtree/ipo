@@ -22,6 +22,33 @@ def init_registry(namespace: argparse.Namespace) -> int:
         return 1
     return 0
 
+def client_connect(namespace: argparse.Namespace):
+    """
+    Testing ICON client connection
+    """
+    import asyncio
+    import os
+    from .client.iconclient import IconClient
+    from .daemon.config import DaemonConfig
+
+    config = DaemonConfig()
+    name = namespace.name
+    socket_path = f'{config.run_directory}/ICON_{name}/icon.sock'
+
+    async def client_loop():
+        signals = asyncio.Queue()
+        client = IconClient(socket_path)
+        client.Connected.connect(signals)
+        client.Disconnected.connect(signals)
+        await client.connect()
+        while True:
+            event = await signals.get()
+            if event.is_signal(client.Connected):
+                print('Client connected')
+            elif event.is_signal(client.Disconnected):
+                print('Client disconnected')
+
+    asyncio.run(client_loop())
 
 def add_subcommand(parser: argparsehelper.AddParser):
     """
@@ -33,3 +60,7 @@ def add_subcommand(parser: argparsehelper.AddParser):
     parser = parser.add_subparsers(dest = 'action', required = True)
     reg = parser.add_parser('init_registry', help = 'Init local docker registry')
     reg.set_defaults(func = init_registry)
+
+    connect = parser.add_parser('connect', help = '(debug hack) Connect to daemon as icon client')
+    connect.set_defaults(func = client_connect)
+    connect.add_argument('name')
