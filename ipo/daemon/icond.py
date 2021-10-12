@@ -70,7 +70,7 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
                 e = read_task.exception()
                 if e is not None:
                     # Task threw exception, connection probably died
-                    print(f'Connection error {e}')
+                    print(f'Connection error {e.__class__.__name__}: {e}')
                     break
                 try:
                     msg = read_task.result()
