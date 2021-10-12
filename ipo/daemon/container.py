@@ -8,6 +8,7 @@ import asyncio
 from typing import Union
 from enum import Enum
 import re
+import os.path
 import docker
 
 from . state import Icond
@@ -17,10 +18,12 @@ from . events import (
     ContainerRunningEvent,
     ContainerFailedEvent,
 )
+from . import message
+from . message import (MessageReader, JSONWriter)
 
 
 # Container states
-ContainerState = Enum('ContainerState', 'STOPPED STARTING RUNNING FAILED')
+ContainerState = Enum('ContainerState', 'STOPPED STARTING CONWAITING RUNNING FAILED')
 
 
 class Container:
@@ -33,6 +36,8 @@ class Container:
     inqueue: asyncio.Queue
     task_runner: AsyncTaskRunner
     container_name: str
+    control_path: str         # Path to mount into container
+    control_socket_path: str  # Container control socket name
 
     def __init__(self, name: str, image: str, icond: Icond):
         """
@@ -48,6 +53,19 @@ class Container:
         self.task_runner = AsyncTaskRunner()
         self.container_name = f'ICON_{self.name}'
         self.icond.eventqueue.listen(ShutdownEvent, self.inqueue)
+        # Create container control path that is mounted inside the container NS
+        control_path = f'{self.icond.config.run_directory}/{self.container_name}'
+        if not os.path.exists(control_path):
+            os.mkdir(control_path, mode = 0o700)
+        # FIXME?: /else clean up all files there perhaps?
+        self.control_path = control_path
+        # Clean up old socket if there
+        control_socket_path = f'{control_path}/icon.sock'
+        if os.path.exists(control_socket_path):
+            os.unlink(control_socket_path)  # If this throws we are screwed anyway
+        self.control_socket_path = control_socket_path
+        # Socket is initialized in async context when task is running
+        self.socket_server = None
 
     def start(self) -> asyncio.Task:
         """
@@ -79,6 +97,24 @@ class Container:
         if event is not None:
             self.icond.publish_event(event)
 
+    async def _init_socket(self) -> AsyncTask:
+        """ Start client socket and begin serving """
+        self.socket_server = await asyncio.start_unix_server(
+            self.handle_connection,
+            path = self.control_socket_path
+        )
+        return AsyncTask(self.socket_server.serve_forever, restartable = False)
+
+    async def handle_connection(self, reader, writer):
+        """ Handle client connection """
+        print(f'Client connected to {self.name}')
+        reader = MessageReader(reader)
+        writer = JSONWriter(writer)
+        while True:
+            msg = await reader.read()
+            if isinstance(msg, message.ClientHello):
+                await writer.write(msg.create_reply(version = '0.0.1'))
+
     async def _run(self):
         # Is it an existing container?
         # TODO: This might be uneccessary if ipo gains some persitent memory over restarts
@@ -89,8 +125,8 @@ class Container:
         except docker.errors.NotFound:
             print(f'Container for {self.name} not found')
             container = await d.containers.create(self.image,
-                                                  name = self.container_name,
-                                                  detach = True)
+                                                  name = self.container_name)
+
         print(container)
         try:
             await container.start()
@@ -98,6 +134,11 @@ class Container:
             self.state = ContainerState.FAILED
             self.emit_state()
             return
+        # Initializing socket "late"; client API must be able to handle
+        # waiting for the appearance of the socket (or re-connecting)
+        consrv_task = await self._init_socket()
+        self.task_runner.start_task(consrv_task)
+        # Now we have to wait for the client to connect
         self.state = ContainerState.RUNNING
         self.emit_state()
         command_task = AsyncTask(self.inqueue.get)
