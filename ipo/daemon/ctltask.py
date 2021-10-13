@@ -1,22 +1,15 @@
 """ ICONctl task handlers """
-import asyncio
 from asyncio import Queue
 import logging
-from abc import ABCMeta, abstractmethod
-
-from typing import Union, Type
 
 import docker  # type: ignore
 
 from . events import (
-    ShutdownEvent,
-    MessageEvent,
     ContainerRunningEvent,
     ContainerFailedEvent
 )
 
-from . state import Icond
-from ..api.message import IconMessage
+from . messagetask import MessageTaskHandler, MessageToHandler
 from ..api import message
 from . container import ContainerState
 
@@ -24,53 +17,9 @@ from . container import ContainerState
 log = logging.getLogger(__name__)
 
 
-class MessageTaskHandler(metaclass = ABCMeta):
-    """ Base class for message handler routines """
-    outqueue: Queue
-    events: Queue
-    task: Union[None, asyncio.tasks.Task]
-    icond: Icond
-
-    def __init__(self, outqueue: Queue, icond: Icond):
-        """
-        outqueue: A queue where this handler can write messages to,
-        """
-        self.outqueue = outqueue
-        self.icond = icond
-        self.events = Queue()
-        self.task = None
-
-    def post(self, msg: IconMessage):
-        """ Post a new message to the handler """
-        self.events.put_nowait(MessageEvent(msg))
-
-    def shutdown(self):
-        """ Order this handler to quit asap """
-        self.events.put_nowait(ShutdownEvent())
-
-    def get_task(self):
-        """ Return the task; can be used to wait for the task """
-        return self.task
-
-    def run(self, initial_msg):
-        """
-        Start running the handler.
-        """
-        self.task = asyncio.create_task(self.handler(initial_msg))
-        return self.task
-
-    @abstractmethod
-    async def handler(self, initial_msg):
-        # pylint: disable=unused-argument
-        """
-        Message handles should implement this.
-        """
-        ...
-
-
 class ContainerRunTask(MessageTaskHandler):
     """ Run (start) container from image """
-    async def handler(self, initial_msg):
+    async def handler(self, initial_msg: message.IconMessage):
         msg = initial_msg
         image = msg.image
         log.debug('Run container %s', msg.image)
@@ -81,7 +30,7 @@ class ContainerRunTask(MessageTaskHandler):
             docker_image = await self.icond.docker.images.get(image)
             log.debug(docker_image)
             reply_msg = msg.create_reply(msg = 'Working..')
-            wakeup = Queue()
+            wakeup = Queue()  # type: Queue
             self.icond.eventqueue.listen([
                 ContainerRunningEvent,
                 ContainerFailedEvent,
@@ -104,4 +53,6 @@ class ContainerRunTask(MessageTaskHandler):
 # Message -> Handler
 CTL_HANDLERS = {
     message.ContainerRun: ContainerRunTask,
-}  # type: dict[Type[message.IconMessage], Type[MessageTaskHandler]]
+}  # type: MessageToHandler
+
+# atype: dict[Type[message.IconMessage], Type[MessageTaskHandler]]
