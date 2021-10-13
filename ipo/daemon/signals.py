@@ -1,8 +1,12 @@
 """ ICON daemon signal handlers """
 import asyncio
 import signal
+import logging
 
 from . state import Icond
+
+
+log = logging.getLogger(__name__)
 
 
 class QuitSignalHandler:
@@ -36,9 +40,10 @@ class SigintHandler(QuitSignalHandler):
     # pylint: disable=too-few-public-methods
     def _print_help(self):
         if self.counter == 1:
-            print("CTRL-C pressed - shutdown")
+            print('\nCTRL-C pressed - shutdown')
         elif self.counter == 2:
-            print("Press CTRL-C one more time to forcibly kill")
+            print('\nPress CTRL-C one more time to forcibly kill')
+        log.info('Received SIGINT')
 
 
 class SigtermHandler(QuitSignalHandler):
@@ -48,7 +53,7 @@ class SigtermHandler(QuitSignalHandler):
         super().__init__(icond, 2)  # Two SIGTERMs = kill
 
     def _print_help(self):
-        print("SIGTERM received")
+        log.info("SIGTERM received")
 
 
 def set_signal_handlers(icond: Icond):

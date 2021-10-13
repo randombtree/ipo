@@ -20,6 +20,9 @@ from ..util.asynctask import AsyncTask, AsyncTaskRunner, waitany
 from . signals import set_signal_handlers
 
 
+log = logging.getLogger(__name__)
+
+
 async def iconctl_connection_handler(reader, writer, icond: Icond):
     """ Icon control channel handler """
     reader = JSONReader(reader)
@@ -61,7 +64,7 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
             if flush_task in completed:
                 # Yeah, could do some diagnostics what happened.. whatever :)
                 e = flush_task.exception()
-                print('Client closed the receive end (connection died?) {e}')
+                log.debug('Client closed the receive end (connection died?) {e}')
                 break
 
             # There was something to read
@@ -70,21 +73,21 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
                 e = read_task.exception()
                 if e is not None:
                     # Task threw exception, connection probably died
-                    print(f'Connection error {e.__class__.__name__}: {e}')
+                    log.debug('Connection error %s: %s', e.__class__.__name__, e)
                     break
                 try:
                     msg = read_task.result()
-                    print(f'Got line {msg}')
+                    log.debug('Got line %s', msg)
                     msg = IconMessage.from_dict(msg)
-                    print(f'Received message: {msg}')
+                    log.debug('Received message: %s', msg)
                     if isinstance(msg, message.Shutdown):
-                        print('Shutting down')
+                        log.info('Shutting down')
                         reply_msg = msg.create_reply(msg = 'Shutting down')
                         await outqueue.put(reply_msg)
                         await outqueue.join()  # Flush outqueue
                         icond.do_shutdown()
                     elif msg.msg_id in msg_handlers:
-                        print('Posting message to existing handler')
+                        log.debug('Posting message to existing handler')
                         msg_handlers[msg.msg_id].post(msg)
                     else:
                         # New task 'connection'
@@ -96,25 +99,25 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
                             msg_tasks[task] = msg.msg_id
                             msg_handlers[msg.msg_id] = handler
                         else:
-                            print(f'Not handling message {msg}')
+                            log.warning('Not handling message %s',  msg)
 
                 except (json.JSONDecodeError, InvalidMessage) as e:
-                    print(f'Invalid message: {e}')
+                    log.warning('Invalid message: %s', e)
                     reply_msg = message.Error(msg = str(e))
                     await outqueue.put(reply_msg)
 
             # A task handler finished?
             for task in completed:
                 if task not in msg_tasks:
-                    print(f'Unknown task finished? Unhandled: {task}')
+                    log.error('Unknown task finished? Unhandled: %s', task)
                     continue
                 # Just cleanup
                 msg_id = msg_tasks[task]
                 handler = msg_handlers[msg_id]
                 del msg_handlers[msg_id]
                 del msg_tasks[task]
-                print(f'Handler {handler} finished')
-    print('Connection closed')
+                log.debug('Handler %s finished', handler)
+    log.debug('Connection closed')
 
 
 def iconctl_connection_factory(icond: Icond):
@@ -149,20 +152,20 @@ class InitializationException(Exception):
 
 async def init_repository(icond: Icond):
     """ Initialize the docker repository (registry) """
-    print("Initializing repository..")
+    log.info('Initializing repository..')
     # Repository
     repository = icond.config.repository
     try:
         repo = await icond.docker.containers.get(repository)
         if repo.status != "running":
-            print(f"ICON repository was not running ({repo.status}), starting it..")
+            log.info('ICON repository was not running (%s), starting it..', repo.status)
             await repo.start()
         else:
-            print("ICON repository ok")
+            log.debug('ICON repository ok')
     except docker.errors.NotFound:
         # First run; create repository
         # TODO: separate init from normal daemon run
-        print("Creating ICON local repository..")
+        log.info('Creating ICON local repository..')
         await icond.docker.containers.run(
             "registry:2",
             name=repository,
@@ -170,7 +173,7 @@ async def init_repository(icond: Icond):
             restart_policy={"name": "always"},
             ports={"5000/tcp": 5000}       # TODO: Config
         )
-        print("Done..")
+        log.info('Done..')
     except docker.errors.APIError as e:
         print("Failed to communicate with Docker")
         print(e)
@@ -183,7 +186,7 @@ async def main():
     os.makedirs(os.path.dirname(icond.config.run_directory), exist_ok = True)
 
     await init_repository(icond)
-    print("Starting server")
+    log.info('Starting server')
 
     ctl_server_task = asyncio.create_task(iconctl_server(icond),
                                           name = "ctl_server")
@@ -191,7 +194,7 @@ async def main():
 
     set_signal_handlers(icond)
     with icond.subscribe_event(ShutdownEvent) as shutdown_event:
-        print('Server started')
+        log.info('Server started')
         shutdown_task = asyncio.create_task(shutdown_event.get())
         (done, _pending) = await waitany({
             shutdown_task,
@@ -201,16 +204,16 @@ async def main():
         for task in done:
             e = task.exception()
             if e:
-                print(f'There was an exception in the daemon: {e}')
+                log.error('There was an exception in the daemon: %s', e, exc_info = True)
                 task.print_stack()
         # Any task finishing indicates that we want to exit, either due to some internal
         # error or a shutdown event
         if shutdown_task in done:
-            print("Shutdown signaled")
+            log.info('Shutdown signaled')
 
         # Graceful shutdown for cmgr
         if cmgr_task not in done:
-            print('Waiting for tasks to shut down..')
+            log.info('Waiting for tasks to shut down..')
             # FIXME: This could take a lot of time, some way to ensure that progress is made
             #        should probalby be added instead of using timeouts
             await asyncio.wait({cmgr_task}, timeout = 60)
@@ -228,6 +231,11 @@ def start(params : argparse.Namespace):
         print("Starting of the ICON daemon might fail when not run as root...")
         print("Try --force if you are confident it will work")
         sys.exit(-1)
-
+    log_handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log_handler.setFormatter(formatter)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(log_handler)
     logging.getLogger("asyncio").setLevel(logging.DEBUG)
     asyncio.run(main())

@@ -176,7 +176,6 @@ class JSONWriter:
         if isinstance(data, IconMessage):
             data = data.as_dict()
         s = json.dumps(data) + '\n'
-        print(s)
         self.writer.write(s.encode())
         await self.writer.drain()
 

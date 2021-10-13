@@ -9,6 +9,7 @@ from typing import Union, cast
 from enum import Enum
 import re
 import os.path
+import logging
 import docker  # type: ignore
 
 from . state import Icond
@@ -20,6 +21,9 @@ from . events import (
 )
 from ..api import message
 from ..api.message import (MessageReader, JSONWriter)
+
+
+log = logging.getLogger(__name__)
 
 
 # Container states
@@ -109,7 +113,7 @@ class Container:
 
     async def handle_connection(self, reader, writer):
         """ Handle client connection """
-        print(f'Client connected to {self.name}')
+        log.debug('Client connected to %s', self.name)
         reader = MessageReader(reader)
         writer = JSONWriter(writer)
         while True:
@@ -123,13 +127,13 @@ class Container:
         d = self.icond.docker
         try:
             container = await d.containers.get(self.container_name)
-            print(f'Container for {self.name} found')
+            log.debug('Container for %s found', self.name)
         except docker.errors.NotFound:
-            print(f'Container for {self.name} not found')
+            log.debug('Container for %s not found', self.name)
             container = await d.containers.create(self.image,
                                                   name = self.container_name)
 
-        print(container)
+        log.debug(container)
         try:
             await container.start()
         except docker.errors.APIError:
@@ -204,33 +208,33 @@ class ContainerManager:
         running_containers = await self.icond.docker.containers.list()
         for container in running_containers:
             if ContainerManager.ICON_RE.match(container.name) is not None:
-                print(f'FIXME: Stopped running unmanaged ICON {container.name}')
+                log.warning('FIXME: Stopped running unmanaged ICON %s', container.name)
                 await container.stop()
 
         command_task = AsyncTask(self.inqueue.get, restartable = False)
         self.task_runner.start_task(command_task)
-        print('ContainerManager started')
+        log.debug('ContainerManager started')
         async for task in self.task_runner.wait_next():
             e = task.exception()
             if e is not None:
-                print(f'Task {task} had an exception {e}')
+                log.error('Task %s had an exception %s', task, e)
             elif task == command_task:
                 result = task.result()
                 self.inqueue.task_done()
                 if isinstance(result, ShutdownEvent):
-                    print('Shutdown event received')
+                    log.info('Shutdown event received')
                     break
             elif task in self.task_container:
                 # A container died
                 container = self.task_container[task]
-                print(f'Container {container.name} died')
+                log.debug('Container %s died', container.name)
                 del self.task_container[task]
             if self.icond.shutdown:
                 break
 
         # TODO: We currently shut down ICONs but this wouldn't strictly necessary - only
         #       some more code to bring back the state of already running when re-starting
-        print('Shutting down containers...')
+        log.info('Shutting down containers...')
         waitfor = list()
         for container in self.containers.values():
             if container.task and not container.task.done():
@@ -238,7 +242,7 @@ class ContainerManager:
             await container.stop()
         if len(waitfor) > 0:
             await asyncio.wait(waitfor)
-        print('Containers shut-down..')
+        log.info('Containers shut-down..')
 
     async def run_container(self, image) -> Container:
         """

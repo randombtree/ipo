@@ -1,6 +1,7 @@
 """ ICONctl task handlers """
 import asyncio
 from asyncio import Queue
+import logging
 
 from typing import Union, Type
 
@@ -17,6 +18,9 @@ from . state import Icond
 from ..api.message import IconMessage
 from ..api import message
 from . container import ContainerState
+
+
+log = logging.getLogger(__name__)
 
 
 class MessageTaskHandler:
@@ -67,13 +71,13 @@ class ContainerRunTask(MessageTaskHandler):
     async def handler(self, initial_msg):
         msg = initial_msg
         image = msg.image
-        print(f'Run container {msg.image}')
+        log.debug('Run container %s', msg.image)
         # TODO!:
         # Docker commands are synchronous, so some
         # threading will be needed here (e.g. loop.run_in_executor()); doing some bad blocking
         try:
             docker_image = await self.icond.docker.images.get(image)
-            print(docker_image)
+            log.debug(docker_image)
             reply_msg = msg.create_reply(msg = 'Working..')
             wakeup = Queue()
             self.icond.eventqueue.listen([
@@ -85,14 +89,14 @@ class ContainerRunTask(MessageTaskHandler):
                 ev = await wakeup.get()
                 wakeup.task_done()
                 if isinstance(ev, ContainerRunningEvent) and ev.container == container:
-                    print(f'Container {image} successfully started')
+                    log.debug('Container %s successfully started', image)
                     break
         except docker.errors.ImageNotFound:
             reply_msg = message.Error(msg_id = msg.msg_id, msg = 'Image not found')
 
         await self.outqueue.put(reply_msg)
         await self.outqueue.join()   # Wait until message is sent
-        print('ContainerRun finished')
+        log.debug('ContainerRun finished')
 
 
 # Message -> Handler
