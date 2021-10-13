@@ -2,6 +2,7 @@
 import asyncio
 import signal
 import logging
+from abc import ABCMeta, abstractmethod
 
 from . state import Icond
 
@@ -9,7 +10,7 @@ from . state import Icond
 log = logging.getLogger(__name__)
 
 
-class QuitSignalHandler:
+class QuitSignalHandler(metaclass = ABCMeta):
     """ Handle termination signal """
     # pylint: disable=too-few-public-methods
     counter: int
@@ -29,6 +30,7 @@ class QuitSignalHandler:
         if self.counter == self.max_counter:
             signal.raise_signal(signal.SIGKILL)
 
+    @abstractmethod
     def _print_help(self):
         """ Print some help info in daemon in reponse to signal """
         # pylint: disable=no-self-use
