@@ -4,7 +4,7 @@ Client connection to ipo
 """
 import asyncio
 
-from .daemon import message
+from .api import message
 
 
 class Connection:

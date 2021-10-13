@@ -14,8 +14,8 @@ from . events import (
 )
 
 from . state import Icond
-from . message import IconMessage
-from . import message
+from ..api.message import IconMessage
+from ..api import message
 from . container import ContainerState
 
 

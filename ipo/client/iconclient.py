@@ -8,8 +8,8 @@ from typing import Union
 
 from ..util.asynctask import AsyncTaskRunner
 from ..util.signal import Signal, Emitter
-from ..daemon import message
-from ..daemon.message import MessageReader, JSONWriter
+from ..api import message
+from ..api.message import MessageReader, JSONWriter
 
 
 class ShutdownEvent:

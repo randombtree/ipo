@@ -23,7 +23,7 @@ def stop_daemon(namespace: argparse.Namespace):
     """
 
     from .connection import Connection
-    from .daemon import message
+    from .api import message
     import asyncio
 
     async def send_shutdown():

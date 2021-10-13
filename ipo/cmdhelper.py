@@ -5,7 +5,7 @@ import asyncio
 from typing import Union
 
 from .connection import Connection
-from .daemon import message
+from .api import message
 
 
 def send_and_receive(msg: message.IconMessage, mask_exceptions = True):

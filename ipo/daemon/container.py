@@ -18,8 +18,8 @@ from . events import (
     ContainerRunningEvent,
     ContainerFailedEvent,
 )
-from . import message
-from . message import (MessageReader, JSONWriter)
+from ..api import message
+from ..api.message import (MessageReader, JSONWriter)
 
 
 # Container states

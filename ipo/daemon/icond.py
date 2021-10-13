@@ -13,8 +13,8 @@ import docker  # type: ignore
 
 from . events import ShutdownEvent
 from . state import Icond
-from . message import (IconMessage, InvalidMessage, JSONReader, JSONWriter)
-from . import message
+from ..api.message import (IconMessage, InvalidMessage, JSONReader, JSONWriter)
+from ..api import message
 from . ctltask import CTL_HANDLERS, MessageTaskHandler
 from ..util.asynctask import AsyncTask, AsyncTaskRunner, waitany
 from . signals import set_signal_handlers

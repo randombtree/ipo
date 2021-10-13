@@ -1,7 +1,7 @@
 """ ICOND common events """
 # pylint: disable=too-few-public-methods
 
-from . message import IconMessage
+from ..api.message import IconMessage
 
 class ShutdownEvent:
     """ Event signalling a shutdown """

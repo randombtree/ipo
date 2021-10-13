@@ -5,7 +5,7 @@ import argparse
 from typing import Union
 from . import argparsehelper
 from .cmdhelper import send_and_receive
-from .daemon import message
+from .api import message
 
 def run_container(namespace: argparse.Namespace):
     """
