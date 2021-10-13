@@ -61,6 +61,11 @@ class AsyncDockerWrapper:
             return map(self.maybe_wrap, obj)
         return obj
 
+    def __str__(self):
+        objdetails = '<AsyncWrapper: %x>' % (id(self),)
+        wrappee = self.original.__str__()
+        return f'{objdetails} for {wrappee}'
+
 
 class AsyncDockerClient(AsyncDockerWrapper):
     """
