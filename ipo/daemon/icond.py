@@ -217,7 +217,7 @@ async def main():
 
     # Shut down control socket, to avoid spewing a lot of resource warnings when debugging
     ctl_server_task.cancel()
-    await asyncio.wait({ctl_server_task}, timeout = 60)
+    await asyncio.wait({ctl_server_task, cmgr_task}, timeout = 60)
     # Also, leaving docker session open will spew warnings
     await icond.docker.close()
 
