@@ -2,6 +2,7 @@
 import asyncio
 from asyncio import Queue
 import logging
+from abc import ABCMeta, abstractmethod
 
 from typing import Union, Type
 
@@ -23,7 +24,7 @@ from . container import ContainerState
 log = logging.getLogger(__name__)
 
 
-class MessageTaskHandler:
+class MessageTaskHandler(metaclass = ABCMeta):
     """ Base class for message handler routines """
     outqueue: Queue
     events: Queue
@@ -58,6 +59,7 @@ class MessageTaskHandler:
         self.task = asyncio.create_task(self.handler(initial_msg))
         return self.task
 
+    @abstractmethod
     async def handler(self, initial_msg):
         # pylint: disable=unused-argument
         """
