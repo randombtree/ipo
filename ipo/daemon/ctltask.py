@@ -23,9 +23,6 @@ class ContainerRunTask(MessageTaskHandler):
         msg = initial_msg
         image = msg.image
         log.debug('Run container %s', msg.image)
-        # TODO!:
-        # Docker commands are synchronous, so some
-        # threading will be needed here (e.g. loop.run_in_executor()); doing some bad blocking
         try:
             docker_image = await self.icond.docker.images.get(image)
             log.debug(docker_image)
