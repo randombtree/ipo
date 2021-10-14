@@ -2,6 +2,7 @@
 Misc commands that might go away as development proceeds.
 
 """
+import asyncio
 import argparse
 from . import argparsehelper
 
@@ -12,21 +13,23 @@ def init_registry(namespace: argparse.Namespace) -> int:
     """
     print('Initializing docker registry...')
     from .daemon import icond
-    state = icond.Icond()
-    try:
-        icond.init_repository(state)
-    except icond.InitializationException as e:
-        print('Failed to init registry..')
-        print(e)
-        return 1
-    return 0
+
+    async def runner():
+        state = icond.Icond()
+        try:
+            await icond.init_repository(state)
+        except icond.InitializationException as e:
+            print('Failed to init registry..')
+            print(e)
+            return 1
+        return 0
+    return asyncio.run(runner())
 
 
 def client_connect(namespace: argparse.Namespace):
     """
     Testing ICON client connection
     """
-    import asyncio
     from .client.iconclient import IconClient
     from .daemon.config import DaemonConfig
 
