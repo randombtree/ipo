@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ Python PyPI (setuptools) for ipo """
 import pathlib
-from setuptools import setup
 import re
+from setuptools import setup  # type: ignore
 
 # Our path
 PWD = pathlib.Path(__file__).parent
