@@ -1,0 +1,4 @@
+exclude pylintrc MANIFEST.in Dockerfile .gitignore test.sh
+recursive-exclude sample *
+recursive-exclude tests *
+recursive-exclude bin *
