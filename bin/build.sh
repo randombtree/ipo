@@ -22,7 +22,8 @@ docker build --tag icon/bullseye .
 docker image tag icon/bullseye:latest localhost:5000/ipo/icon:latest
 
 SUDO=""
-if [ $EUID -ne 0 ];then
+euid=$(test x$EUID != x && echo $EUID || id -u)
+if [ $euid -ne 0 ];then
     read -p "Docker probably needs root; use it [y/N]?" answer
     if [ x$answer = xy ] || [ x$answer = xY ];then
 	SUDO="sudo"
