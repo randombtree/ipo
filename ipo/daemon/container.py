@@ -130,9 +130,16 @@ class Container:
             log.debug('Container for %s found', self.name)
         except docker.errors.NotFound:
             log.debug('Container for %s not found', self.name)
+            # Mount control socket into container
+            volumes = {
+                self.control_path : {
+                    'bind': '/run/icond',
+                    'mode': 'ro',
+                },
+            }
             container = await d.containers.create(self.image,
-                                                  name = self.container_name)
-
+                                                  name = self.container_name,
+                                                  volumes = volumes)
         log.debug(container)
         try:
             await container.start()
