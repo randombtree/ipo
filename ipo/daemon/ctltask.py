@@ -52,4 +52,3 @@ CTL_HANDLERS = {
     message.ContainerRun: ContainerRunTask,
 }  # type: MessageToHandler
 
-# atype: dict[Type[message.IconMessage], Type[MessageTaskHandler]]
