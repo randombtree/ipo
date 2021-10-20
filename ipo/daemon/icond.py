@@ -124,6 +124,8 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
         await flush_task.asynctask
     # Make sure we cancel all left-over tasks
     asyncrunner.clear()
+    reader.close()
+    writer.close()
     log.debug('Connection closed')
 
 
