@@ -35,7 +35,7 @@ class IconClient(Emitter):
     state: ClientState
     task_runner: AsyncTaskRunner
 
-    def __init__(self, sockname):
+    def __init__(self, sockname = '/run/icond/icon.sock'):
         """
         Initialize the ICON client.
         sockname: Socket to connect to
