@@ -39,6 +39,8 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
         """
         while True:
             msg = await outqueue.get()
+            if isinstance(msg, ShutdownEvent):
+                return
             await writer.write(msg)
             outqueue.task_done()
 
@@ -117,6 +119,9 @@ async def iconctl_connection_handler(reader, writer, icond: Icond):
                 del msg_handlers[msg_id]
                 del msg_tasks[task]
                 log.debug('Handler %s finished', handler)
+        # Make sure to output writer quits
+        await outqueue.put(ShutdownEvent())
+        await flush_task.asynctask
     log.debug('Connection closed')
 
 
