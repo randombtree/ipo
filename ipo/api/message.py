@@ -10,6 +10,8 @@ from collections.abc import Callable
 
 class JSONReader:
     """ Simple JSON wrapper over StreamReader """
+    reader: asyncio.StreamReader
+
     def __init__(self, reader: asyncio.StreamReader):
         self.reader = reader
 
@@ -17,6 +19,13 @@ class JSONReader:
         """ Read a single JSON message from backend """
         line = (await self.reader.readline()).decode()
         return json.loads(line)
+
+    def close(self):
+        """ Close the underlying stream """
+        # The API is slightly confusing as the reader lacks a close
+        # but the writer has one; try to bring some sanity into this
+        # by providing a blank close here
+        return
 
 
 class InvalidMessage(Exception):
@@ -198,6 +207,10 @@ class JSONWriter:
         s = json.dumps(data) + '\n'
         self.writer.write(s.encode())
         await self.writer.drain()
+
+    def close(self):
+        """ Close the underlying stream """
+        self.writer.close()
 
 
 class MessageReader(JSONReader):
