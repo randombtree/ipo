@@ -2,10 +2,12 @@
 Container commands. These mimic the "docker container" class commands.
 """
 import argparse
-from typing import Union
+from collections import defaultdict
 from . import argparsehelper
 from .cmdhelper import send_and_receive
 from .api import message
+from .connection import Connection
+
 
 def run_container(namespace: argparse.Namespace):
     """
@@ -20,6 +22,27 @@ def run_container(namespace: argparse.Namespace):
     else:
         print('Failed')
 
+async def ls_container(namespace: argparse.Namespace):
+    """
+    Ask daemon for container listing
+    """
+    connection = await Connection.connect()
+    await connection.write(message.ContainerLs())
+    containers = await connection.read()
+    if not isinstance(containers, message.ContainerListing):
+        raise Exception('Communication error {containers}')
+    listing = [dict(name = 'Container', state = 'State', container = 'Docker container')]
+    listing.extend([dict(name = k, state = v['state'], container = v['container'])
+                    for k, v in containers.containers.items()])
+    # Field widths
+    width = defaultdict(int)  # type: dict[str, int]
+    for c in listing:
+        for k, v in c.items():
+            width[k] = max(width[k], len(v) + 1)
+    formatstr = '{name:%ds}{state:%ds}{container:%ds}' % (width['name'], width['state'], width['container'])
+    for c in listing:
+        print(formatstr.format(**c))
+
 def add_subcommand(subparser: argparsehelper.AddParser):
     """
     container subcommands
@@ -33,3 +56,7 @@ def add_subcommand(subparser: argparsehelper.AddParser):
     run = action.add_parser('run', help = 'Run a new ICON')
     run.set_defaults(func = run_container)
     run.add_argument('image')
+
+    # List containers
+    ls = action.add_parser('ls', help = 'List ICONs')
+    ls.set_defaults(func = ls_container)

@@ -47,8 +47,20 @@ class ContainerRunTask(MessageTaskHandler):
         log.debug('ContainerRun finished')
 
 
+class ContainerLsTask(MessageTaskHandler):
+    """ Container listing task """
+    async def handler(self, initial_msg: message.IconMessage):
+        log.debug('Container ls')
+        containers = self.icond.cmgr.list()
+        props = { c.name: dict(state =  c.state.name, container =  c.container_name)
+                  for c in containers }
+        reply = initial_msg.create_reply(containers = props)
+        await self.outqueue.put(reply)
+        await self.outqueue.join()
+
+
 # Message -> Handler
 CTL_HANDLERS = {
     message.ContainerRun: ContainerRunTask,
+    message.ContainerLs: ContainerLsTask,
 }  # type: MessageToHandler
-

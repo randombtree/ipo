@@ -158,6 +158,19 @@ class ContainerRun(IconMessage):
     ...
 
 
+class ContainerListing(Reply):
+    """ Listing of containers """
+    # TODO: Proper validator for containers listing
+    FIELD_VALIDATORS = dict(containers = dict)
+    ...
+
+
+class ContainerLs(IconMessage):
+    """ List containers cmd """
+    REPLY_CLS = ContainerListing
+    ...
+
+
 class HelloReply(IconMessage):
     """ Reply message to *Hello """
     FIELD_VALIDATORS = dict(version = None)

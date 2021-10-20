@@ -270,6 +270,6 @@ class ContainerManager:
         self.containers[image] = container
         return container
 
-    async def list(self) -> list[Container]:
+    def list(self) -> list[Container]:
         """ Return all the containers """
         return list(self.containers.values())
