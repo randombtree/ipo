@@ -54,7 +54,7 @@ class IconMessage(metaclass = MessageRegistry):
     STR_ID      = "id"
     STR_TYPE    = "type"
 
-    FIELD_VALIDATORS = dict()  # type: dict[str, Union[None, Callable[[str], bool]]]
+    FIELD_VALIDATORS = dict()  # type: dict[str, Union[None, Callable[[str], bool], type]]
     REPLY_CLS = 'Reply'        # type: Union[None, str, type]  # Create a reply message using this class
 
     data: dict[str, str]
@@ -75,8 +75,15 @@ class IconMessage(metaclass = MessageRegistry):
             if field not in self.data:
                 raise InvalidMessage(f'{clsname} requires field {field}')
             value = self.data[field]
-            if validator is not None and not validator(value):
-                raise InvalidMessage(f'{clsname} field {field} of invalid value {value}')
+            # TODO: Validators should only run when in developer mode
+            if validator is not None:
+                # Validator can either be a type or a callable
+                if isinstance(validator, type):
+                    if not isinstance(value, validator):
+                        vtype = type(value)
+                        raise InvalidMessage(f'{clsname} field {field} of invalid type {vtype}, expected {validator}')
+                elif not validator(value):
+                    raise InvalidMessage(f'{clsname} field {field} of invalid value {value}')
 
     def __getitem__(self, key):
         return self.data[key]
