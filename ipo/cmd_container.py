@@ -32,6 +32,8 @@ async def ls_container(namespace: argparse.Namespace):
     if not isinstance(containers, message.ContainerListing):
         raise Exception('Communication error {containers}')
     listing = [dict(name = 'Container', state = 'State', container = 'Docker container')]
+    listing.append({k: ''.rjust(len(v), '-') for k, v in listing[0].items() })
+    # Underlines
     listing.extend([dict(name = k, state = v['state'], container = v['container'])
                     for k, v in containers.containers.items()])
     # Field widths
