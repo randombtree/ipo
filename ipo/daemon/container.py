@@ -11,6 +11,7 @@ import re
 import os.path
 import logging
 import docker  # type: ignore
+import json
 
 from . state import Icond
 from ..util.asynctask import AsyncTask, AsyncTaskRunner
@@ -97,7 +98,9 @@ class Container:
             await self.inqueue.put(ShutdownEvent)
         self.task = None
 
-    def emit_state(self):
+    def emit_state(self, new_state = None):
+        if new_state is not None:
+            self.state = new_state
         """ Send an appropriate event based on the current state """
         event = ContainerRunningEvent(self) if self.state == ContainerState.RUNNING else None
         if event is not None:
@@ -113,13 +116,18 @@ class Container:
 
     async def handle_connection(self, reader, writer):
         """ Handle client connection """
+        # TODO: Handling multiple connections vs. state
         log.debug('Client connected to %s', self.name)
         reader = MessageReader(reader)
         writer = JSONWriter(writer)
-        while True:
-            msg = await reader.read()
-            if isinstance(msg, message.ClientHello):
-                await writer.write(msg.create_reply(version = '0.0.1'))
+        try:
+            while True:
+                msg = await reader.read()
+                if isinstance(msg, message.ClientHello):
+                    await writer.write(msg.create_reply(version = '0.0.1'))
+                    self.emit_state(ContainerState.RUNNING)
+        except (json.JSONDecodeError, message.InvalidMessage) as e:
+            self.emit_state(ContainerState.CONWAITING)
 
     async def _run(self):
         # Is it an existing container?
@@ -152,7 +160,7 @@ class Container:
         consrv_task = await self._init_socket()
         self.task_runner.start_task(consrv_task)
         # Now we have to wait for the client to connect
-        self.state = ContainerState.RUNNING
+        self.state = ContainerState.CONWAITING
         self.emit_state()
         command_task = AsyncTask(self.inqueue.get)
         self.task_runner.start_task(command_task)
