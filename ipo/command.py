@@ -5,8 +5,10 @@ Acts as an entry-point for all subcommands.
 """
 import sys
 import argparse
+import asyncio
 import pkgutil
 import importlib
+from inspect import iscoroutinefunction
 
 
 def main():
@@ -35,6 +37,10 @@ def main():
     args = parser.parse_args()
     # The subparsers add entry points to the namespace in the form of a callable function
     if 'func' in args:
-        args.func(args)
+        func = args.func
+        if iscoroutinefunction(func):
+            asyncio.run(func(args))
+        else:
+            func(args)
     else:
         parser.print_help()
