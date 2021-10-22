@@ -41,7 +41,6 @@ async def web_init(argv):
     Initializer for webserver.
     """
     global icon_client
-    # TODO: Fix hard coded socket value somehow
     client_params = dict()
     if ICON_SOCKET in os.environ:
         client_params['sockname'] = os.environ[ICON_SOCKET]
