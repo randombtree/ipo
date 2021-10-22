@@ -98,9 +98,9 @@ class Container:
         self.task = None
 
     def emit_state(self, new_state = None):
+        """ Send an appropriate event based on the current state """
         if new_state is not None:
             self.state = new_state
-        """ Send an appropriate event based on the current state """
         event = ContainerRunningEvent(self) if self.state == ContainerState.RUNNING else None
         if event is not None:
             self.icond.publish_event(event)
