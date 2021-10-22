@@ -43,6 +43,7 @@ class Container:
     control_path: str         # Path to mount into container
     control_socket_path: str  # Container control socket name
     socket_server: Union[asyncio.AbstractServer, None]
+    clients: int              # Connected clients count
 
     def __init__(self, name: str, image: str, icond: Icond):
         """
@@ -71,6 +72,7 @@ class Container:
         self.control_socket_path = control_socket_path
         # Socket is initialized in async context when task is running
         self.socket_server = None
+        self.clients = 0
 
     def start(self) -> asyncio.Task:
         """
@@ -115,18 +117,23 @@ class Container:
 
     async def handle_connection(self, reader, writer):
         """ Handle client connection """
-        # TODO: Handling multiple connections vs. state
         log.debug('Client connected to %s', self.name)
         reader = MessageReader(reader)
         writer = JSONWriter(writer)
+        self.clients += 1
         try:
             while True:
                 msg = await reader.read()
                 if isinstance(msg, message.ClientHello):
                     await writer.write(msg.create_reply(version = '0.0.1'))
-                    self.emit_state(ContainerState.RUNNING)
+                    if self.clients == 1:
+                        self.emit_state(ContainerState.RUNNING)
         except (json.JSONDecodeError, message.InvalidMessage) as e:
-            self.emit_state(ContainerState.CONWAITING)
+            self.clients -= 1
+            if self.clients == 0:
+                # This state change can be redundant if no Hello message was received
+                # but it's ok.
+                self.emit_state(ContainerState.CONWAITING)
 
     async def _run(self):
         # Is it an existing container?
