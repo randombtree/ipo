@@ -100,6 +100,9 @@ class IconMessage(metaclass = MessageRegistry):
     def __setitem__(self, key, value):
         self.data[key] = value
 
+    def __contains__(self, key):
+        return key in self.data
+
     def __getattr__(self, key):
         """ Convinience method for accessing message fields directly as msg.field """
         if key not in self.data:
