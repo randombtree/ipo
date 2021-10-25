@@ -115,14 +115,17 @@ class IconClient(Emitter):
                             self.state = ClientState.CONNECTED
                             await self.Connected()
                             continue
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, message.InvalidMessage) as e:
+                        log.error('Error decoding message %s: %s', e.__class__.__name__, e)
                         ...
+                    reader.close()
+                    writer.close()
                     log.error('Connection handshake failed')
                     connect_task = self.task_runner.run(asyncio.sleep(10))
             elif task == read_task:
                 # Is there something to read
-                e = task.exception()
-                if e:
+                exception = task.exception()
+                if exception:
                     # Read failed; just throw away this connection and try again
                     self.state = ClientState.CONNECTING
                     await self.Disconnected()
@@ -130,9 +133,9 @@ class IconClient(Emitter):
                     # Start reconnecting ASAP
                     connect_task = self.task_runner.run(asyncio.sleep(0))
                     continue
-                r = task.result()
+                msg = task.result()
+                log.debug('ICON server sent us %s', msg)
                 # TODO..
-                await self.Connected()
             elif task == inqueue_task:
                 r = task.result()
                 self.inqueue.task_done()
