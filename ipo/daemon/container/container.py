@@ -122,18 +122,29 @@ class Container:
         writer = JSONWriter(writer)
         self.clients += 1
         try:
+            msg = await reader.read()
+            if isinstance(msg, message.ClientHello):
+                await writer.write(msg.create_reply(version = '0.0.1'))
+                if self.clients == 1:
+                    self.emit_state(ContainerState.RUNNING)
+                log.debug('%s: Client handshake completed', self.name)
+            else:
+                log.error('Invalid handshake message')
+                raise message.InvalidMessage(f'Expected ClientHello, got {msg}')
             while True:
                 msg = await reader.read()
-                if isinstance(msg, message.ClientHello):
-                    await writer.write(msg.create_reply(version = '0.0.1'))
-                    if self.clients == 1:
-                        self.emit_state(ContainerState.RUNNING)
+
         except (json.JSONDecodeError, message.InvalidMessage) as e:
+            log.error('%s: Error communicating with client: %s', self.name, e)
             self.clients -= 1
             if self.clients == 0:
                 # This state change can be redundant if no Hello message was received
                 # but it's ok.
                 self.emit_state(ContainerState.CONWAITING)
+
+        reader.close()
+        writer.close()
+        log.error('%s: Client disconnected', self.name)
 
     async def _run(self):
         # Is it an existing container?
