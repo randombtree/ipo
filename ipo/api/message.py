@@ -45,6 +45,11 @@ class MessageRegistry(type):
     def __new__(cls, name, bases, attrs):
         # create the new type
         newtype = super(MessageRegistry, cls).__new__(cls, name, bases, attrs)
+
+        # Make sure to not register duplicate message names, it leads to
+        # "interesting problems".
+        if name in cls.registered:
+            raise Exception(f'{name} message is already registered!')
         # store it
         cls.registered[name] = newtype
         return newtype
