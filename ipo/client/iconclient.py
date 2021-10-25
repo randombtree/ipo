@@ -3,6 +3,7 @@ from enum import Enum, auto
 import asyncio
 from asyncio import Task, Queue
 import json
+import logging
 
 from typing import Union
 
@@ -10,6 +11,9 @@ from ..util.asynctask import AsyncTaskRunner
 from ..util.signal import Signal, Emitter
 from ..api import message
 from ..api.message import MessageReader, JSONWriter
+
+
+log = logging.getLogger(__name__)
 
 
 class ShutdownEvent:
@@ -82,12 +86,12 @@ class IconClient(Emitter):
                 if e:
                     # Connection failed
                     # Try again in 5 secs..
-                    print('Connection to server failed')
+                    log.warning('Connection to server failed')
                     connect_task = self.task_runner.run(asyncio.sleep(5))
                     continue
                 r = task.result()
                 if r is None:
-                    print('Timeout; Try to connect to server')
+                    log.warning('Timeout; Try to connect to server')
                     # This is after a delay.. try to connect
                     connect_task = self.task_runner.run(
                         asyncio.open_unix_connection(path = self.sockname),
@@ -96,6 +100,7 @@ class IconClient(Emitter):
                     (reader, writer) = r
                     reader = MessageReader(reader)
                     writer = JSONWriter(writer)
+                    log.debug('Sending handshake')
                     await writer.write(message.ClientHello(version = '0.0.1'))
                     try:
                         # Wait for the appropriate reply
@@ -106,12 +111,13 @@ class IconClient(Emitter):
                             read_task = self.task_runner.run(
                                 reader.read
                             )
+                            log.debug('Connected')
                             self.state = ClientState.CONNECTED
                             await self.Connected()
                             continue
                     except json.JSONDecodeError:
                         ...
-                    print('Connection handshake failed')
+                    log.error('Connection handshake failed')
                     connect_task = self.task_runner.run(asyncio.sleep(10))
             elif task == read_task:
                 # Is there something to read
@@ -131,10 +137,10 @@ class IconClient(Emitter):
                 r = task.result()
                 self.inqueue.task_done()
                 if isinstance(r, ShutdownEvent):
-                    print('Client will disconnect')
+                    log.debug('Client will disconnect')
                     break
             else:
-                print('BUGBUG! Unhandled task {task}')
+                log.error('BUGBUG! Unhandled task {task}')
         self.state = ClientState.DISCONNECTED
         await self.Disconnected()
         self.task_runner.clear()
