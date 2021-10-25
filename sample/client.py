@@ -7,7 +7,7 @@ import asyncio
 
 import aiohttp
 
-from iconsrv.message import Hello, HelloReply, MessageSocket
+from iconsrv.message import UserHello, UserHelloReply, MessageSocket
 from ipo.util.asynctask import AsyncTaskRunner
 
 
@@ -25,9 +25,9 @@ async def main(argv):
         ms = MessageSocket(ws)
 
         # Handshake
-        await ms.send(Hello())
+        await ms.send(UserHello())
         msg = await ms.receive()
-        if not isinstance(msg, HelloReply):
+        if not isinstance(msg, UserHelloReply):
             print('Handshake error')
             return
         ws_read_task = runner.run(ms.receive)

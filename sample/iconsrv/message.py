@@ -15,14 +15,14 @@ from ipo.api.message import (
 log = logging.getLogger(__name__)
 
 
-class HelloReply(IconMessage):
+class UserHelloReply(IconMessage):
     """ Handshake reply from server """
     FIELD_VALIDATORS = dict(session_id = str)
 
 
-class Hello(IconMessage):
+class UserHello(IconMessage):
     """ Connection initiation message from client """
-    REPLY_CLS = HelloReply
+    REPLY_CLS = UserHelloReply
 
 
 class MessageSocket:

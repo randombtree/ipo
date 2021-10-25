@@ -8,6 +8,7 @@ import sys
 import os
 import json
 import logging
+import asyncio
 
 from typing import Union
 
@@ -21,10 +22,13 @@ from ipo.api.message import (
     InvalidMessage,
 )
 from . message import (
-    Hello,
-    HelloReply,
+    UserHello,
+    UserHelloReply,
     MessageSocket,
 )
+
+
+log = logging.getLogger(__name__)
 
 
 def env_or(env, default, target = str):
@@ -60,10 +64,10 @@ async def websocket_handler(request):
 
     # Handshake
     msg = await ms.receive()  # type: IconMessage
-    if not isinstance(msg, Hello):
+    if not isinstance(msg, UserHello):
         print('Invalid hello')
         return ws
-    await ms.send(HelloReply(session_id = 'todo'))
+    await ms.send(UserHelloReply(session_id = 'todo'))
     runner = AsyncTaskRunner()
     ws_read_task = runner.run(ms.receive)
     async for task in runner.wait_next():
@@ -89,8 +93,12 @@ async def web_init(argv):
     if ICON_SOCKET in os.environ:
         client_params['sockname'] = os.environ[ICON_SOCKET]
     icon_client = IconClient(**client_params)
-    
+    log.info('Waiting for connection to ICON server')
+    connect_waitqueue  = asyncio.Queue()
+    icon_client.Connected.connect(connect_waitqueue)
     await icon_client.connect()
+    log.info('Connected to ICON')
+    event = await connect_waitqueue.get()
     app = web.Application()
     app.add_routes(routes)
     return app
