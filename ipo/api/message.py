@@ -118,6 +118,11 @@ class IconMessage(metaclass = MessageRegistry):
         }
         return d
 
+    def as_json(self):
+        """ Return message data as json string """
+        d = self.as_dict()
+        return json.dumps(d)
+
     def create_reply(self, **data) -> 'Reply':
         """ Create a reply message based on this message (i.e. copy id) """
         # NB: Will throw is self hasn't got a reply class
@@ -140,6 +145,11 @@ class IconMessage(metaclass = MessageRegistry):
         except MessageTypeNotFoundException as e:
             raise InvalidMessage(f'Unknown message type {msg_type}') from e
         return msg_cls(msg_id = msg_id, **source)
+
+    @classmethod
+    def from_json(cls, source: str) -> 'IconMessage':
+        """ De-serialize from json """
+        return cls.from_dict(json.loads(source))
 
 
 class Reply(IconMessage):
