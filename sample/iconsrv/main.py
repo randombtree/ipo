@@ -7,6 +7,7 @@ python3 -m aiohttp.web -H localhost -P 9998 iconsrv.main:web_init
 import sys
 import os
 import json
+import logging
 
 from typing import Union
 
@@ -100,6 +101,12 @@ def main():
     Main entry point.
     Starts aiohttp web server framework.
     """
+    log_handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log_handler.setFormatter(formatter)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(log_handler)
     web.run_app(web_init(sys.argv), port=CONFIG_PORT)
 
 
