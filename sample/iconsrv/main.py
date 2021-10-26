@@ -57,7 +57,7 @@ async def index(request):
 @routes.get('/ws')
 async def websocket_handler(request):
     """ Websocket handler """
-    print('WS connected')
+    log.debug('WS connected from %s', request.remote)
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     ms = MessageSocket(ws)
@@ -65,22 +65,24 @@ async def websocket_handler(request):
     # Handshake
     msg = await ms.receive()  # type: IconMessage
     if not isinstance(msg, UserHello):
-        print('Invalid hello')
+        log.warning('Invalid hello from %s', request.remote)
         return ws
     await ms.send(UserHelloReply(session_id = 'todo'))
     runner = AsyncTaskRunner()
     ws_read_task = runner.run(ms.receive)
     async for task in runner.wait_next():
         if task == ws_read_task:
-            print('msg received')
             exc = task.exception()
             if exc:
-                print(f'Exception {exc.__class__.__name__} receiving messages: {exc}')
+                log.error('%s: Exception %s receiving messages: %s',
+                          request.remote,
+                          exc.__class__.__name__,
+                          exc)
                 break
             msg = task.result()
-            print(msg)
+            log.debug('%s: msg received - %s', request.remote, msg)
     runner.clear()
-    print('WS closed')
+    log.debug('%s: WS closed', request.remote)
     return ws
 
 
