@@ -175,13 +175,19 @@ async def init_repository(icond: Icond):
         # First run; create repository
         # TODO: separate init from normal daemon run
         log.info('Creating ICON local repository..')
-        await icond.docker.containers.run(
-            "registry:2",
-            name=repository,
-            detach=True,
-            restart_policy={"name": "always"},
-            ports={"5000/tcp": 5000}       # TODO: Config
-        )
+        try:
+            await icond.docker.containers.run(
+                "registry:2",
+                name=repository,
+                detach=True,
+                restart_policy={"name": "always"},
+                ports={"5000/tcp": 5000}       # TODO: Config
+            )
+        except docker.errors.APIError as e:
+            # Ok, this happened once (in VM w/o proper connection), so better
+            # deal with it to not cause more head-scratchers
+            log.error('Failed to initialize registry. Possible cause; internet connection? %s', e)
+            raise InitializationException('Failed to initialize registry') from e
         log.info('Done..')
     except docker.errors.APIError as e:
         print("Failed to communicate with Docker")
