@@ -19,12 +19,16 @@ from ipo.daemon.routing.traceroute import (
 
 
 def init_logger():
+    """ Init logger so we can get some output when debugging failures """
     log_handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     log_handler.setFormatter(formatter)
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(log_handler)
+
+
+#init_logger()
 
 
 def ipaddr(a = 10, b = 1, c = 1, d = 1):
@@ -73,7 +77,7 @@ class TestTraceTask(IsolatedAsyncioTestCase):
                 self.assertAlmostEqual(result.rtt, self.PROBES_RTTS[ndx])
 
 
-MAX_CACHE_FILE_AGE=10 * 60
+MAX_CACHE_FILE_AGE = 10 * 60
 
 
 def cache_get_recent(fn: str) -> Optional[list]:
@@ -104,10 +108,9 @@ class TestTraceRoute(IsolatedAsyncioTestCase):
     TRACE_TARGET_HOSTNAME = 'google.com'
     TRACE_TARGET = socket.gethostbyname(TRACE_TARGET_HOSTNAME)
     TRACE_REGEX = re.compile(r'^\s*(?P<ttl>\d+)\s+(?P<ip>[0-9.]+)\s+(?P<rtt>[0-9.]+)')
-    TRACE_CACHEFILE = '.traceroute.out'
+    TRACE_CACHEFILE = f'.traceroute-{TRACE_TARGET_HOSTNAME}.out'
 
     def setUp(self):
-        #init_logger()
         self.traceroute = Traceroute()
         self.traceroute.start()
 
