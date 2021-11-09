@@ -86,7 +86,7 @@ class TraceTask:
     target: bytes
     hostaddr: str
     active: int
-    finished: bool
+    finished: Union[bool, float]
 
     def __init__(self, timecache: TimeCache, target: Union[str, bytes]):
         # Not sure which one to use so for now support both
@@ -110,16 +110,49 @@ class TraceTask:
         list of hops (first in list is ttl 1)
         """
         return await self.wakeup.get()
-        # _finish has culled all floats from the list
-        #return cast(list[Hop], self.traceroute)
 
-    def _finish(self):
+    def _finish(self, onTimeout = True):
         """
         Indicate that we are finished with the traceroute and wake up
         the waiter.
         """
-        if self.finished:
+        # Probes can and will arrive unordered and if by waiting a few more moments
+        # increases the route coverage, we might as well do it
+        if isinstance(self.finished, bool) and self.finished:
             return
+        if isinstance(self.finished, float):
+            # We won't finish 'for real' before cooldown
+            now = self.time.get()
+            if self.finished > now:
+                # Are all the abstaining probes finished (e.g. have timeouts left)?
+                # (note that all timeouts should be the same now, so no need to check for them)
+                for ndx, val in enumerate(self.traceroute):
+                    if isinstance(val, HopMetric) and val.ip == self.target:
+                        break
+                    if isinstance(val, float):
+                        log.debug('%s: Still waiting for TTL %d', self.hostaddr, ndx + 1)
+                        return
+        elif not onTimeout:
+            # E.g. reached destination, apply a timeout if there are abstaining probes
+            now = self.time.get()
+            has_abstaining = False
+            cooldown = 0.0
+            cooldown_time = 0   # Record cooldown time here for debug output
+            # 'Figure out cooldown + update timeouts
+            # (n.b. Traceroute won't notice all adjusted timeouts due to being in an ordered dict)
+            for val in self.traceroute:
+                if isinstance(val, HopMetric) and val.ip == self.target:
+                    cooldown_time = 2 * val.rtt
+                    cooldown = now + cooldown_time
+                    break
+                if isinstance(val, float):
+                    has_abstaining = True
+
+            if has_abstaining:
+                log.debug('%s: Probe finished to destination, but waiting for abstaining probes for %f seconds',
+                          self.hostaddr, cooldown_time)
+                self.finished = cooldown
+                return
         log.debug('Finished probe to %s, waking up waiter', self.hostaddr)
         self.finished = True
         # cull the tail
@@ -141,12 +174,35 @@ class TraceTask:
                 return True
         # There can also be unfinished hops waiting to time out (float:s),
         # we time out them directly
-        l = list(map(lambda item: None if isinstance(item, float) else item,
+        trace = list(map(lambda item: None if isinstance(item, float) else item,
                      filter(RemoveUnfinished(), reversed(self.traceroute))))
-        l.reverse()
-        self.traceroute = l
+        trace.reverse()
+
+        # The target host can reply to several probes, so the end can contain a plenthora of
+        # probe results. Trim the end
+
+        class TrimTailFilter:
+            """
+            Stateful filter that removes duplicate Hops for the target host
+            """
+            found_end: bool
+            target: bytes
+
+            def __init__(self, target):
+                self.target = target
+                self.found_end = False
+
+            def __call__(self, item):
+                if self.found_end:
+                    return False
+                if isinstance(item, HopMetric) and item.ip == self.target:
+                    self.found_end = True
+                return True
+
+        trace = list(filter(TrimTailFilter(self.target), trace))
+        self.traceroute = trace
         # Wake up waiter
-        self.loop.call_soon_threadsafe(self.wakeup.put_nowait, l)
+        self.loop.call_soon_threadsafe(self.wakeup.put_nowait, trace)
 
     def __iter__(self):
         """
@@ -167,7 +223,9 @@ class TraceTask:
         """
         # Discard exess results after finished, they
         # are most probably None:s.
-        if self.finished:
+        # Note, dual use, finished can also contain a cooldown,
+        # in which case new results are still accepted
+        if isinstance(self.finished, bool) and self.finished:
             return
         assert self.active > 0
         self.active -= 1
@@ -192,16 +250,18 @@ class TraceTask:
                     log.debug('%s: 3 misses preceeds us, assume finished',
                               self.hostaddr)
                     self._finish()
+            elif isinstance(self.finished, float):
+                # There is a cooldown waiting
+                self._finish()
         else:
             rtt = self.time.get() - ts
             self.traceroute[ndx] = HopMetric(ip = ip, rtt = rtt)
+            log.debug('RTT %f', rtt)
             # We reached the target
-            # Note: Due to re-ordering the exact hop count to target isn't precise
-            #       as we don't stick around waiting for more ICMP messages after we
-            #       hear from the host. There might be some extra 'empty' hops before
-            #       the target due to this 'optimization'.
-            if ip == self.target:
-                self._finish()
+            # (or we are waiting for some remaining probes)
+            if ip == self.target or isinstance(self.finished, float):
+                self._finish(onTimeout = False)
+
 
     def is_finished(self):
         """ If this trace has reached it's destination """
