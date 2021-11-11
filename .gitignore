@@ -4,3 +4,4 @@ ootw/
 build/
 dist/
 *egg-info/
+.traceroute*
