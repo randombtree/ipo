@@ -3,3 +3,4 @@
 # project requirements
 
 docker
+kademlia>=2.2.2
