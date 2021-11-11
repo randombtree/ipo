@@ -208,6 +208,7 @@ async def main():
     cmgr_task = icond.cmgr.start()
 
     set_signal_handlers(icond)
+    await icond.start()
     with icond.subscribe_event(ShutdownEvent) as shutdown_event:
         log.info('Server started')
         shutdown_task = asyncio.create_task(shutdown_event.get())
@@ -236,6 +237,7 @@ async def main():
     # Shut down control socket, to avoid spewing a lot of resource warnings when debugging
     ctl_server_task.cancel()
     await asyncio.wait({ctl_server_task, cmgr_task}, timeout = 60)
+    await icond.stop()
     # Also, leaving docker session open will spew warnings
     await icond.docker.close()
 
