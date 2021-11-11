@@ -9,12 +9,13 @@
 # If something fails midway just stop..
 set -e
 
+. $(dirname $0)/findpy
+
 PROJDIR=$(dirname $0|xargs dirname)
 cd $PROJDIR
 
-
 # Build installable packet
-./setup.py sdist
+$PYTHON setup.py sdist
 # Build image with the icon package installed
 docker build --tag icon/bullseye .
 

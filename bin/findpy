@@ -1,0 +1,16 @@
+# Find a compatible python version and export it
+# in env variable PYTHON (meant to be sourced where needed)
+
+versions="3.10 3.9"
+
+for version in $versions;do
+    PYTHON=$(command -v python$version||true)
+    if [ x$PYTHON != x ];then
+	export PYTHON
+	break
+    fi
+done
+if [ x$PYTHON = x ];then
+    echo "Supported Python versions are [$versions], but none found!"
+    exit 1
+fi

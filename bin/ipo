@@ -13,4 +13,6 @@ if [ x"$addpath" != x ];then
 fi
 # Else expect to have 'ipo' installed as a python module.
 
-exec python3 -m ipo $@
+. $(dirname $0)/findpy
+
+exec $PYTHON -m ipo $@
