@@ -14,19 +14,21 @@ REFTIME = time.time_ns()
 HOUR = 60 * 60 * 10 ** 9
 WEEK = 7 * 24 * HOUR
 
+def make_ip(a = 10, b = 1, c = 2, d = 1):
+    return bytes([a, b, c, d])
 
 class TestStorage(IsolatedAsyncioTestCase):
     """ Test the custom kademlia storage """
     TEST_METRICS = {
         1: [
-            DistanceMetric(6,  2, 1, 1337, REFTIME - HOUR),     # noqa: E241
-            DistanceMetric(10, 3, 2, 1337, REFTIME - HOUR),
-            DistanceMetric(20, 3, 3, 1337, REFTIME - 2 * HOUR),
+            DistanceMetric(6,  2, make_ip(c = 1), 1337, REFTIME - HOUR),     # noqa: E241
+            DistanceMetric(10, 3, make_ip(c = 2), 1337, REFTIME - HOUR),
+            DistanceMetric(20, 3, make_ip(c = 3), 1337, REFTIME - 2 * HOUR),
         ],
         2 : [
-            DistanceMetric(5,  2, 4, 1337, REFTIME - HOUR),     # noqa: E241
-            DistanceMetric(15, 3, 5, 1337, REFTIME - HOUR),
-            DistanceMetric(25, 3, 6, 1337, REFTIME - 2 * HOUR),
+            DistanceMetric(5,  2, make_ip(c = 4), 1337, REFTIME - HOUR),     # noqa: E241
+            DistanceMetric(15, 3, make_ip(c = 5), 1337, REFTIME - HOUR),
+            DistanceMetric(25, 3, make_ip(c = 6), 1337, REFTIME - 2 * HOUR),
         ]
     }
 
@@ -54,7 +56,7 @@ class TestStorage(IsolatedAsyncioTestCase):
         """ Test appending a metric to an existing collection """
         KEY = 2
         metrics = list(self.TEST_METRICS[KEY])
-        new_metric = DistanceMetric(10, 3, 10, 1337, REFTIME)
+        new_metric = DistanceMetric(10, 3, make_ip(d = 10), 1337, REFTIME)
         metrics.insert(1, new_metric)  # As second item
         # And append to store
         self.storage[KEY] = pack_metrics([new_metric])
@@ -66,7 +68,7 @@ class TestStorage(IsolatedAsyncioTestCase):
         with time_patch as tp:
             # Let one week pass
             tp.return_value = REFTIME + WEEK + HOUR
-            new_metrics = pack_metrics([DistanceMetric(7, 3, 10, 1337, REFTIME + WEEK)])
+            new_metrics = pack_metrics([DistanceMetric(7, 3, make_ip(d = 10), 1337, REFTIME + WEEK)])
             KEY = 5
             self.storage[KEY] = new_metrics
             self.storage.cull()

@@ -52,7 +52,7 @@ def unpack_metrics(binary_metrics: bytes) -> DistanceMetricList:
             log.warning('Metrics were not in sort order. Skipping element')
             continue
         last_rtt = rtt
-        ip = socket.htonl(ip)  # Keep it ready to use in inet_ntoa when needed
+        ip = ip.to_bytes(4, byteorder = 'big')
         ret.append(DistanceMetric(rtt = rtt, hops = hops, ip = ip, port = port, ts = ts))
     return ret
 
@@ -67,7 +67,7 @@ def pack_metrics(metrics: DistanceMetricList) -> bytes:
                          metric.rtt,
                          metric.hops,
                          metric.port,
-                         socket.ntohl(metric.ip),  # to keep IP in network byte order
+                         int.from_bytes(metric.ip, byteorder = 'big'),  # to keep IP in network byte order
                          metric.ts)
     return bytes(buf)
 
