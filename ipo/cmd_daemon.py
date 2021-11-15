@@ -4,9 +4,12 @@ Daemon control commands.
 Note that we defer loading much of the cruft until an action is decided to speed
 up the overall command line experience.
 """
+import socket
 import argparse
+from collections.abc import Iterable
+from .api import message
 from . import argparsehelper
-
+from .cmdhelper import send_and_receive
 
 def start_daemon(namespace: argparse.Namespace):
     """
@@ -23,7 +26,6 @@ def stop_daemon(namespace: argparse.Namespace):
     """
 
     from .connection import Connection
-    from .api import message
     import asyncio
 
     async def send_shutdown():
@@ -42,6 +44,61 @@ def stop_daemon(namespace: argparse.Namespace):
         print(f'Error {e} when communicating with daemon')
 
 
+def bootstrap_daemon(namespace: argparse.Namespace):
+    """
+    Bootstrap node
+    """
+    ip = get_ipaddr(namespace.ip)
+    port = namespace.port
+    reply = send_and_receive(message.BootstrapNode(ip = ip, port = port))
+    if reply is not None:
+        print(reply)
+    else:
+        print('Failed!')
+
+
+def get_ipaddr(host: str) -> str:
+    """
+    Return the ip address of host (or if it's a proper ip address returns self).
+
+    Exceptions: OSError
+    """
+    try:
+        socket.inet_aton(host)
+        return host
+    except OSError:
+        ...
+    # Try to resolve it if its a hostname
+    return socket.gethostbyname(host)
+
+
+class IPChecker(Iterable):
+    """ Fake container to check for ip address in parser """
+    def __contains__(self, item):
+        if not isinstance(item, str):
+            return False
+        try:
+            get_ipaddr(item)
+            return True
+        except OSError:
+            ...
+        return False
+
+    def __iter__(self):
+        yield 'a.b.c.d'
+
+
+class PortChecker(Iterable):
+    """ Fake container to check for proper port range in parser """
+    def __contains__(self, item):
+        return 0 < item < 65535
+
+    def __iter__(self):
+        # Can't give the whole range as it would be printed
+        # on error :(
+        yield 1
+
+
 def add_subcommand(subparser: argparsehelper.AddParser):
     """
     Add subcommand details to a subparser.
@@ -58,3 +115,12 @@ def add_subcommand(subparser: argparsehelper.AddParser):
 
     stop = action.add_parser('stop', help = 'Stop the ICON daemon')
     stop.set_defaults(func = stop_daemon)
+
+    bootstrap = action.add_parser('bootstrap', help = 'Bootstrap global network view from other node')
+    bootstrap.set_defaults(func = bootstrap_daemon)
+    # Error messages suck on these, but at least they work as should and ip
+    # should be 'acceptable' and port in the correct range
+    bootstrap.add_argument('ip', choices = IPChecker(),
+                           help = 'Remote IP or hostname')
+    bootstrap.add_argument('port', type = int, choices = PortChecker(),  # see comment in PortChecker..
+                           help = 'Remote port address 1-65535')

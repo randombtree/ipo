@@ -6,7 +6,7 @@ from . asyncdocker import AsyncDockerClient
 from . events import ShutdownEvent
 from . eventqueue import EventQueue, Subscription
 from . config import DaemonConfig
-from . routing import Router
+from . routing import RouteManager
 
 
 class Icond:
@@ -15,7 +15,7 @@ class Icond:
     shutdown: bool
     eventqueue: EventQueue
     config: DaemonConfig
-    router: Router
+    router: RouteManager
 
     def __init__(self):
         # Work around circular deps
@@ -26,7 +26,7 @@ class Icond:
         self.eventqueue = EventQueue()
         self.config = DaemonConfig()
         self.cmgr = container.ContainerManager(self)
-        self.router = Router(self.config)
+        self.router = RouteManager(self.config)
 
     async def start(self):
         """
@@ -38,7 +38,7 @@ class Icond:
         """
         Stop.
         """
-        self.router.stop()
+        await self.router.stop()
 
     def do_shutdown(self):
         """ Shutdown daemon commanded """

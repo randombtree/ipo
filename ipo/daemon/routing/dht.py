@@ -17,7 +17,12 @@ from kademlia.network import Server as KademliaServer  # type: ignore
 from kademlia.protocol import KademliaProtocol         # type: ignore
 from kademlia.node import Node                         # type: ignore
 
-from . storage import RouteStorage
+from . storage import (
+    RouteStorage,
+    DistanceMetric,
+    unpack_metrics,
+    pack_metrics,
+)
 
 log = logging.getLogger(__name__)
 
@@ -35,11 +40,24 @@ class IPOKademliaProtocol(KademliaProtocol):
         super().__init__(source_node, storage, ksize)
         self.ip = None
 
-    def rpc_ping(self, sender, nodeid):
+    def rpc_ping(self, sender, ping_data):
         """
+        Handle ping from remote.
+
         Deviation from vanilla Kademlia:
         Send back the caller address with the local node id.
         """
+        if len(ping_data) != 26:
+            # Well, it sort of works but pings the other way will result in mayhem.
+            # With a few quirks it could be fixed, but isn't really not that important..
+            log.warning('Ping from vanilla Kademlia at %s not supported', sender[0])
+            return super().rpc_ping(sender, ping_data)
+        our_ip = ping_data[0:4]
+        _port = int.from_bytes(ping_data[4:6], byteorder = 'big')  # TODO: Handle NAPT
+        if self.ip is None:
+            log.debug('Determined that our IP is %s', socket.inet_ntoa(our_ip))
+            self.ip = our_ip
+        nodeid = ping_data[6:]
         local_id = super().rpc_ping(sender, nodeid)
         assert len(local_id) == 20
         ip = socket.inet_aton(sender[0])
@@ -50,12 +68,23 @@ class IPOKademliaProtocol(KademliaProtocol):
         ret[6:] = local_id
         return bytes(ret)
 
+    async def do_ping(self, address, nodeid):
+        """
+        Do the actual ping; which includes both nodeid and addresses
+        """
+        payload = bytearray()
+        ip = socket.inet_aton(address[0])
+        payload[0:] = ip
+        payload[4:] = address[1].to_bytes(2, byteorder = 'big')
+        payload[6:] = nodeid
+        return await self.ping(address, bytes(payload))
+
     async def call_ping(self, node_to_ask):
         """
         Deviation from vanilla Kademlia. Decode bytes.
         """
         address = (node_to_ask.ip, node_to_ask.port)
-        result = await self.ping(address, self.source_node.id)
+        result = await self.do_ping(address, self.source_node.id)
         if result[0]:
             ret = result[1]
             # TODO: This is obviously the unsafe way to do it, need to have an
@@ -98,12 +127,28 @@ class IPOKademliaServer(KademliaServer):
             asyncio.create_task(self.bootstrap(self.bootstrap_list()),
                                 name = 'kademlia_bootstrap')
 
+    async def get_metrics(self, router_ip: bytes) -> Optional[list[DistanceMetric]]:
+        """
+        Get the DistanceMetric:s for a router from DHT
+        """
+        packed_metrics = await self.get(router_ip)
+        return None if packed_metrics is None else unpack_metrics(packed_metrics)
+
+    async def set_metric(self, router_ip, metric: DistanceMetric) -> bool:
+        """
+        Store this node metric for a router into DHT
+
+        Returns success
+        """
+        packed_metric = pack_metrics([metric])
+        return await self.set(router_ip, packed_metric)
+
     async def bootstrap_node(self, addr):
         """
         Override due to change in ping api, need to change the bootstrap
         sequence
         """
-        ok, ret = await self.protocol.ping(addr, self.node.id)
+        ok, ret = await self.protocol.do_ping(addr, self.node.id)
         if ok:
             if not isinstance(ret, bytes) or len(ret) != 26:
                 return [False, None]

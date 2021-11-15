@@ -59,8 +59,22 @@ class ContainerLsTask(MessageTaskHandler):
         await self.outqueue.join()
 
 
+class BootstrapNodeTask(MessageTaskHandler):
+    """ Bootstrap DHT node from ip """
+    async def handler(self, initial_msg: message.IconMessage):
+        assert isinstance(initial_msg, message.BootstrapNode)
+        ip = initial_msg.ip
+        port = int(initial_msg.port)
+        log.debug('Bootstrap node from %s:%d', ip, port)
+        success = await self.icond.router.add_node(ip, port)
+        reply_msg = initial_msg.create_reply(msg = 'Ok') if success else \
+            initial_msg.create_reply(reply_cls = message.Error, msg = 'Failed to contact bootstrap node')
+        await self.outqueue.put(reply_msg)
+
+
 # Message -> Handler
 CTL_HANDLERS = {
     message.ContainerRun: ContainerRunTask,
     message.ContainerLs: ContainerLsTask,
+    message.BootstrapNode: BootstrapNodeTask,
 }  # type: MessageToHandler

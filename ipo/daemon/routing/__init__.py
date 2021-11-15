@@ -1,6 +1,6 @@
 """ Route and distance mesaurements """
-from . router import Router
+from . router import RouteManager
 
 __all__ = [
-    'Router'
+    'RouteManager'
 ]

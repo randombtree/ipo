@@ -2,7 +2,7 @@
 import uuid
 import json
 import asyncio
-from typing import Union
+from typing import Union, Optional
 from collections.abc import Callable
 
 # pylint: disable=too-few-public-methods
@@ -129,11 +129,12 @@ class IconMessage(metaclass = MessageRegistry):
         d = self.as_dict()
         return json.dumps(d)
 
-    def create_reply(self, **data) -> 'Reply':
+    def create_reply(self, /, reply_cls: Optional[type['Reply']] = None, **data) -> 'Reply':
         """ Create a reply message based on this message (i.e. copy id) """
         # NB: Will throw is self hasn't got a reply class
-        reply_cls = self.REPLY_CLS if isinstance(self.REPLY_CLS, type) \
-            else MessageRegistry.get_message_class(self.REPLY_CLS)
+        if reply_cls is None:
+            reply_cls = self.REPLY_CLS if isinstance(self.REPLY_CLS, type) \
+                else MessageRegistry.get_message_class(self.REPLY_CLS)
         return reply_cls(msg_id = self.msg_id, **data)
 
     @classmethod
@@ -209,6 +210,13 @@ class ClientHello(IconMessage):
     """ ICON container initialization message """
     FIELD_VALIDATORS = dict(version = None)
     REPLY_CLS = HelloReply
+    ...
+
+
+class BootstrapNode(IconMessage):
+    """ Provide DHT bootstrap node """
+    FIELD_VALIDATORS = dict(ip = str, port = int)
+    REPLY_CLS = ReplyMsg
     ...
 
 
