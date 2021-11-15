@@ -16,6 +16,12 @@ class MyEmitter(Emitter):
         await self.Signal2(msg = msg, obj = obj)
 
 
+class SyncEmitter(Emitter):
+    Signal1 = Signal(asynchronous = False)
+    def emit(self, msg):
+        self.Signal1(msg = msg)
+
+
 class TestSignal(IsolatedAsyncioTestCase):
     """ Test util.signal """
     def setUp(self):
@@ -54,3 +60,14 @@ class TestSignal(IsolatedAsyncioTestCase):
 
         with self.assertRaises(QueueEmpty):
             event = self.queue2.get_nowait()
+
+    async def test_synchronous(self):
+        """ Test synchronous signal """
+        emitter = SyncEmitter()
+        queue = Queue()
+        msg = 'foo'
+        emitter.Signal1.connect(queue)
+        emitter.emit(msg)
+        event = queue.get_nowait()
+        self.assertEqual(msg, event['msg'])
+

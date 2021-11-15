@@ -1,9 +1,9 @@
 """ 'QT' inspired simple async per object signal/slot support """
-from asyncio import Queue
+import asyncio
+from asyncio import Queue, Future
 from weakref import WeakSet
 from dataclasses import dataclass
-
-from typing import Union
+from typing import Union, Optional
 
 
 @dataclass
@@ -44,8 +44,9 @@ class Signal:
     instance: 'Emitter'
     owner: Union[type, None]
     name: Union[str, None]
+    asynchronous: bool
 
-    def __init__(self, /, parent = None, instance = None):
+    def __init__(self, /, parent = None, instance = None, asynchronous = True):
         self.parent   = parent
         self.instance = instance
         self.slots    = WeakSet()
@@ -56,9 +57,12 @@ class Signal:
         else:
             self.owner = self.name = None
 
-    async def __call__(self, / , **kwargs):
-        """ Emit an event """
-        # Only support call on instance signals, it seems sensible that way
+        self.asynchronous = asynchronous
+
+    def __call__(self, /, **kwargs) -> Optional[Future]:
+        """
+        Do the actual calling, handles sync/async.
+        """
         if not self.instance:
             raise TypeError(f'Signal {self.owner.__class__.__name__}->{self.name} cannot be called directly')
 
@@ -66,8 +70,13 @@ class Signal:
                       signal = self,
                       kwargs = kwargs)
         # Queue events
+        if self.asynchronous:
+            if len(self.slots) > 0:
+                return asyncio.gather(*list(map(lambda slot: slot.put(event), self.slots)))
+            return asyncio.sleep(0)
         for slot in self.slots:
-            await slot.put(event)
+            slot.put_nowait(event)
+        return None
 
     def __set_name__(self, owner, name):
         # We get the variable name and the owner class
@@ -104,6 +113,8 @@ class Emitter:
 
             val = getattr(cls, attr)
             if isinstance(val, Signal):
-                real_signal = Signal(parent = val, instance = instance)
+                real_signal = Signal(parent = val,
+                                     instance = instance,
+                                     asynchronous = val.asynchronous)
                 setattr(instance, attr, real_signal)
         return instance
