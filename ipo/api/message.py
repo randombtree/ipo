@@ -95,6 +95,7 @@ class IconMessage(metaclass = MessageRegistry):
                 if isinstance(validator, type):
                     if not isinstance(value, validator):
                         vtype = type(value)
+                        self.data[field] = vtype
                         raise InvalidMessage(f'{clsname} field {field} of invalid type {vtype}, expected {validator}')
                 elif not validator(value):
                     raise InvalidMessage(f'{clsname} field {field} of invalid value {value}')
