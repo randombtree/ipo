@@ -108,7 +108,7 @@ class Router:
         """
         This router hasn't been updated in quite a while. Router is down?
         """
-        return now - self.last_updated > 2 * ROUTER_MAX_AGE
+        return now - self.last_update > 2 * ROUTER_MAX_AGE
 
     def __eq__(self, o):
         return isinstance(o, self.__class__) and self.ip == o.ip
@@ -146,10 +146,10 @@ class RouteManager:
 
     async def start(self):
         """ Start controller """
-        self.task = asyncio.create_task(self._run())
         self.traceroute.start()
         # DHT uses UDP, so use the same port number as the orchestrator
         await self.dht.listen(int(self.config.port))
+        self.task = asyncio.create_task(self._run())
 
     async def stop(self):
         """ Stop controller """
@@ -274,7 +274,6 @@ class RouteManager:
             if router.is_stale(time.monotonic()):
                 self.edge_routers.discard(router)
 
-
     async def add_route(self, ip: Union[str, bytes]):
         """ Add a route destination - this will be probed later """
         ip = ip if isinstance(ip, bytes) else socket.inet_aton(ip)
@@ -303,8 +302,13 @@ class RouteManager:
     async def _run(self):
         log.debug('Starting manager')
         runner = AsyncTaskRunner()
-        refresh_task = runner.run(lambda: asyncio.sleep(ROUTER_REFRESH_INTERVAL))
+        refresh_task = runner.run(asyncio.sleep, ROUTER_REFRESH_INTERVAL)
         command_task = runner.run(self.cmd_queue.get)
+
+        new_dht_nodes = Queue()
+        self.dht.protocol.NewNode.connect(new_dht_nodes)
+        new_node_task = runner.run(new_dht_nodes.get)
+
         async for task in runner.wait_next():
             e = task.exception()
             if e is not None:
@@ -320,5 +324,10 @@ class RouteManager:
                     await self._probe_route(cmd)
             elif task == refresh_task:
                 await self._refresh_routes()
-
+            elif task == new_node_task:
+                event = task.result()
+                ip = event['ip']
+                log.debug('Probing new node %s from DHT connection', ip)
+                await self._probe_route(ip)
+        runner.clear()
         log.debug('Stopping manager')

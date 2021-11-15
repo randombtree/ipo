@@ -17,6 +17,7 @@ from kademlia.network import Server as KademliaServer  # type: ignore
 from kademlia.protocol import KademliaProtocol         # type: ignore
 from kademlia.node import Node                         # type: ignore
 
+from ipo.util.signal import Signal, Emitter
 from . storage import (
     RouteStorage,
     DistanceMetric,
@@ -27,13 +28,15 @@ from . storage import (
 log = logging.getLogger(__name__)
 
 
-class IPOKademliaProtocol(KademliaProtocol):
+class IPOKademliaProtocol(KademliaProtocol, Emitter):
     """
     Enhanced kademlia protocol.
 
     - Ping: Include source address in reply as to help the other end figure out it's
             active address (if there are many).
     """
+    NewNode = Signal(asynchronous = False)   # Need to use sync signals due to api constraints
+
     ip: Optional[bytes]
 
     def __init__(self, source_node, storage, ksize):
@@ -96,6 +99,12 @@ class IPOKademliaProtocol(KademliaProtocol):
             # a NAPT GW (which isn't supported now).
             result[1] = ret[6:]
         self.handle_call_response(result, node_to_ask)
+
+    def welcome_if_new(self, node):
+        if not self.router.is_new_node(node):
+            return
+        super().welcome_if_new(node)
+        self.NewNode(ip = node.ip)
 
 
 class IPOKademliaServer(KademliaServer):
