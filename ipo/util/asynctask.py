@@ -41,10 +41,11 @@ class AsyncTask:
     _restartable: bool
     _asynctask: Union[Task, None]
 
-    def __init__(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc, Coroutine], restartable: bool = True):
+    def __init__(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc, Coroutine], *params, restartable: bool = True):
         """
         fctry: The factory method that creates an async task to wait for. It can also be an async
                function in which case it will be run inside a task.
+        params: In case a coroutine function is passed, these params will be used to call it
         restartable: If set to false the factory method will run only once (and be removed once
                      ready).
         """
@@ -55,7 +56,7 @@ class AsyncTask:
             coroutine: CoroutineFunc = fctry   # To make type checking happy
 
             def task_fctry() -> Task:
-                return asyncio.create_task(coroutine())
+                return asyncio.create_task(coroutine(*params))
 
             fctry = task_fctry
         self.fctry =  cast(AsyncFctryProtocol, fctry)  # fctry is now guaranteed to be a function
@@ -130,12 +131,12 @@ class AsyncTaskRunner:
         # Wakeup waiting task if done from other async task
         self._maybe_wakeup()
 
-    def run(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc, Coroutine], restartable: bool = True) -> AsyncTask:
+    def run(self, fctry: Union[AsyncFctryProtocol, CoroutineFunc, Coroutine], *params, restartable: bool = True) -> AsyncTask:
         """
         Create an async task for the async method or factory and run it.
         This is equivalent to creating an AsyncTask and then starting it.
         """
-        task = AsyncTask(fctry, restartable)
+        task = AsyncTask(fctry, *params, restartable = restartable)
         self.start_task(task)
         return task
 
