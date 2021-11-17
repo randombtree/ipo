@@ -95,7 +95,7 @@ class ContainerManager:
             await asyncio.wait(waitfor)
         log.info('Containers shut-down..')
 
-    async def run_container(self, image) -> Container:
+    async def run_container(self, image, **params) -> Container:
         """
         Run (start) the container.
         image: The image to use
@@ -106,7 +106,8 @@ class ContainerManager:
             if container.is_running():
                 return container
         else:
-            container = Container(image, image, self.icond)  # TODO: Allow multiple ICONs from same image
+            # TODO: Allow multiple ICONs from same image
+            container = Container(image, image, self.icond, **params)
 
         task = AsyncTask(lambda: container.start(), restartable = False)
         self.task_container[task] = container

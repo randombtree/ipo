@@ -23,7 +23,15 @@ class ContainerRunTask(MessageTaskHandler):
     async def handler(self, initial_msg: message.IconMessage):
         msg = initial_msg
         image = msg.image
-        log.debug('Run container %s', msg.image)
+
+        # Convert here between cmdline api and docker api
+        params: dict[str, str] = {}
+        if 'env' in msg:
+            params['environment'] = msg.env
+        if 'publish' in msg:
+            params['ports'] = msg.publish
+
+        log.debug('Run container %s, params %s', msg.image, params)
         try:
             docker_image = await self.icond.docker.images.get(image)
             log.debug(docker_image)
@@ -33,7 +41,7 @@ class ContainerRunTask(MessageTaskHandler):
                 ContainerRunningEvent,
                 ContainerFailedEvent,
             ], wakeup)
-            container = await self.icond.cmgr.run_container(image)
+            container = await self.icond.cmgr.run_container(image, **params)
             while container.state != ContainerState.RUNNING:
                 ev = await wakeup.get()
                 wakeup.task_done()

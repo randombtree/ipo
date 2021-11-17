@@ -35,6 +35,7 @@ class Container:
     name: str
     image: str
     icond: Icond
+    params: dict[str, str]
     task: Union[None, asyncio.Task]  # The running task
     state: ContainerState
     inqueue: asyncio.Queue
@@ -45,14 +46,16 @@ class Container:
     socket_server: Union[asyncio.AbstractServer, None]
     clients: int              # Connected clients count
 
-    def __init__(self, name: str, image: str, icond: Icond):
+    def __init__(self, name: str, image: str, icond: Icond, **params):
         """
         name: Container name
+        params: Container parameters for docker
         icond: Daemon global state
         """
         self.name = name
         self.image = image
         self.icond = icond
+        self.params = params
         self.task = None
         self.state = ContainerState.STOPPED
         self.inqueue = asyncio.Queue()
@@ -153,6 +156,11 @@ class Container:
         try:
             container = await d.containers.get(self.container_name)
             log.debug('Container for %s found', self.name)
+            # Fixme: Hmph, the current ICON api is a bit hacky, ideally we would
+            #        mirror docker api, e.g. first create container then specify
+            #        to run it
+            if self.params:
+                log.warning('Re-using container, parameters ignored')
         except docker.errors.NotFound:
             log.debug('Container for %s not found', self.name)
             # Mount control socket into container
@@ -164,7 +172,8 @@ class Container:
             }
             container = await d.containers.create(self.image,
                                                   name = self.container_name,
-                                                  volumes = volumes)
+                                                  volumes = volumes,
+                                                  **self.params)
         log.debug(container)
         try:
             await container.start()
