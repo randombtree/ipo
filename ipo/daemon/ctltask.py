@@ -1,5 +1,6 @@
 """ ICONctl task handlers """
 from asyncio import Queue
+import socket
 import logging
 
 import docker  # type: ignore
@@ -72,9 +73,22 @@ class BootstrapNodeTask(MessageTaskHandler):
         await self.outqueue.put(reply_msg)
 
 
+class FindOrchestratorTask(MessageTaskHandler):
+    """ Find orchestrator for IP """
+    async def handler(self, initial_msg: message.IconMessage):
+        assert isinstance(initial_msg, message.FindOrchestrator)
+        ip = initial_msg.ip
+        result = await self.icond.router.find_orchestrators(ip)
+        listing = list(map(lambda metric: dict(ip = socket.inet_ntoa(metric.ip),
+                                               rtt = metric.rtt), result))
+        reply_msg = initial_msg.create_reply(metrics = listing)
+        await self.outqueue.put(reply_msg)
+
+
 # Message -> Handler
 CTL_HANDLERS = {
     message.ContainerRun: ContainerRunTask,
     message.ContainerLs: ContainerLsTask,
     message.BootstrapNode: BootstrapNodeTask,
+    message.FindOrchestrator: FindOrchestratorTask,
 }  # type: MessageToHandler

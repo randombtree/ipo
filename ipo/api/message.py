@@ -220,6 +220,17 @@ class BootstrapNode(IconMessage):
     ...
 
 
+class OrchestratorListing(Reply):
+    """ Listing for orchestrators """
+    FIELD_VALIDATORS = dict(metrics = list)
+
+
+class FindOrchestrator(IconMessage):
+    """ Find orchestrator for ip """
+    FIELD_VALIDATORS = dict(ip = str)
+    REPLY_CLS = OrchestratorListing
+
+
 class JSONWriter:
     """ Simple JSON wrapper over StreamWriter """
     writer: asyncio.StreamWriter

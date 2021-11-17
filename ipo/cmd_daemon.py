@@ -57,6 +57,24 @@ def bootstrap_daemon(namespace: argparse.Namespace):
         print('Failed!')
 
 
+def find_orchestrator(namespace: argparse.Namespace):
+    """
+    Find orchestrator for ip address
+    """
+    ip = get_ipaddr(namespace.ip)
+    reply = send_and_receive(message.FindOrchestrator(ip = ip))
+    if reply is None:
+        print('Failed to contact daemon?')
+    elif isinstance(reply, message.OrchestratorListing):
+        print('Orchestrators:')
+        print('%-15s RTT' % ('IP'))
+        print('%-15s ---' % ('--'))
+        for o in reply['metrics']:
+            print('{ip:15s} {rtt}'.format(**o))
+    else:
+        print(reply)
+
+
 def get_ipaddr(host: str) -> str:
     """
     Return the ip address of host (or if it's a proper ip address returns self).
@@ -124,3 +142,8 @@ def add_subcommand(subparser: argparsehelper.AddParser):
                            help = 'Remote IP or hostname')
     bootstrap.add_argument('port', type = int, choices = PortChecker(),  # see comment in PortChecker..
                            help = 'Remote port address 1-65535')
+
+    find = action.add_parser('find', help = 'Find closest orchestrators for address')
+    find.set_defaults(func = find_orchestrator)
+    find.add_argument('ip', choices = IPChecker(),
+                      help = 'Remote IP or hostname')
