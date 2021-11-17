@@ -41,6 +41,15 @@ DistanceMetric = namedtuple('DistanceMetric', 'rtt hops ip port ts')  # NB: IP i
 DistanceMetricList = list[DistanceMetric]
 
 
+def str_metrics(metric_list: DistanceMetricList):
+    """ Output human readable string from metric list """
+    return ' // '.join(map(
+        lambda metric: '%s:%d hops: %d, rtt;%d, ts: %d' % (
+            socket.inet_ntoa(metric.ip), metric.port,
+            metric.hops, metric.rtt, metric.ts),
+        metric_list))
+
+
 def unpack_metrics(binary_metrics: bytes) -> DistanceMetricList:
     """ Unpack metrics from binary form """
     ret = []  # type: DistanceMetricList
@@ -123,7 +132,7 @@ class RouteStorage(IStorage):
     We need however to attach several data points to each key, so a few
     modifications are needed to allow appending new data instead of replacing it.
     """
-    data: OrderedDict
+    data: OrderedDict[bytes, tuple[int, DistanceMetric]]
     ttl: int            # Maximum age in ns
 
     def __init__(self, ttl=604800):
@@ -189,7 +198,7 @@ class RouteStorage(IStorage):
 
     def get(self, key, default=None):
         if key in self.data:
-            return self[key]
+            return pack_metrics(self.data[key][1])
         return default
 
     def __getitem__(self, key):
@@ -216,3 +225,11 @@ class RouteStorage(IStorage):
         internal_values = map(operator.itemgetter(1), self.data.values())
         ivalues = map(pack_metrics, internal_values)
         return zip(ikeys, ivalues)
+
+    def __contains__(self, key):
+        return key in self.data
+
+    def __str__(self):
+        def humanize(kv_tuple):
+            return '%s - %s' % (kv_tuple[0], str_metrics(kv_tuple[1][1]))
+        return f'{self.__class__.__name__}:\n' + '\n'.join(map(humanize, self.data.items()))
