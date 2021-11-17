@@ -147,9 +147,9 @@ class IPOKademliaServer(KademliaServer):
 
     async def listen(self, port, *_args, **_kwargs):
         await super().listen(port)
-        if len(self.bootstrap_list) > 0:
+        if self.bootstrap_list:
             # Schedule background bootstrap (it can take a while)
-            asyncio.create_task(self.bootstrap(self.bootstrap_list()),
+            asyncio.create_task(self.bootstrap(self.bootstrap_list),
                                 name = 'kademlia_bootstrap')
 
     async def get(self, key):
