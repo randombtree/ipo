@@ -15,7 +15,7 @@ from ... util.asynctask import AsyncTaskRunner
 from .. events import ShutdownEvent
 
 from . dht import IPOKademliaServer
-from . traceroute import Traceroute, HopMetric
+from . traceroute import Traceroute, HopMetric, Hop
 from . storage import DistanceMetric
 from .. config import DaemonConfig
 
@@ -26,6 +26,15 @@ log = logging.getLogger(__name__)
 ROUTER_MIN_REFRESH: float = 10 * 60.0   # Minimum router refresh interval, avoid frequent DHT updates
 ROUTER_REFRESH_INTERVAL: float = 12 * 60 * 60.0  # Opportunistic refresh this often
 ROUTER_MAX_AGE: float =  24 * 60 * 60.0   # Refresh routers that are older than this
+
+LOCAL_NODE_ADDRESS = bytes([0, 0, 0, 0])  # Dummy IP to annotate local node
+
+
+def ipselect(ip: Union[str, bytes]) -> tuple[bytes, str]:
+    """ Get both the bytes and string representation from ip """
+    ipstr = ip if isinstance(ip, str) else socket.inet_ntoa(ip)
+    ip = ip if isinstance(ip, bytes) else socket.inet_aton(ip)
+    return (ip, ipstr)
 
 
 class Router:
@@ -176,6 +185,65 @@ class RouteManager:
         now = now if now is not None else time.monotonic()
         return ip not in self.routers or self.routers[ip].should_update(now)
 
+    async def _update_routes(self, hops: list[Hop]):
+        """
+        Update routes from traceroute data
+        """
+        now = time.monotonic()
+        router_ip = cast(HopMetric, hops[-1]).ip
+        if not self.should_update_router_for(router_ip, now):
+            if log.getEffectiveLevel() <= logging.DEBUG:
+                log.debug('Not updating router %s', socket.inet_ntoa(router_ip))
+            return
+
+        # Update routing
+        last_router: Optional[Router] = None
+        announcements: list[Router] = []
+        for ndx, hop in enumerate(hops):
+            if hop is None:
+                continue
+            if hop.ip in self.routers:
+                router = self.routers[hop.ip]
+                announce = router.update(hop.rtt, now)
+            else:
+                # New router
+                router = Router(ip = hop.ip, rtt = hop.rtt, hops = ndx + 1, ts = now)
+                self.routers[hop.ip] = router
+                announce = True
+            if last_router:
+                last_router.add_route(router)
+
+            last_router = router
+            if announce:
+                announcements.append(router)
+        # All routers up to date?
+        if not announcements:
+            return
+        # Now we insert and wait..
+        current_time_ms = int(time.time() * 1000)
+        success = await asyncio.gather(
+            *list(map(lambda r: self.dht.set_metric(r.ip,
+                                                    self._make_metric(r, current_time_ms)),
+                      announcements)))
+        now = time.monotonic()
+        if not all(success):
+            if not any(success):
+                log.error('Failure to insert routers, network connection error?')
+            else:
+                log.error('Some route updates failed?')
+        for (success, router) in zip(success, announcements):
+            if log.getEffectiveLevel() <= logging.DEBUG:
+                log.debug('Router %s %s updated',
+                          socket.inet_ntoa(router.ip),
+                          'successfully' if success else 'unsuccessfully')
+            if success:
+                router.mark_updated(now)
+
+        # Preserve this route?
+        last_router = announcements[-1]
+        if last_router.is_edge():
+            self.edge_routers.add(last_router)
+
     async def _probe_route(self, ip: Union[str, bytes], /, is_router = False):
         """
         Update global routing view from route to ip
@@ -186,8 +254,7 @@ class RouteManager:
             log.warning('Cannot update routing, not connected to DHT!')
             return
 
-        ipstr = ip if isinstance(ip, str) else socket.inet_ntoa(ip)
-        ip = ip if isinstance(ip, bytes) else socket.inet_aton(ip)
+        ip, ipstr = ipselect(ip)
 
         # Is it necessary to update routing at all?
         if is_router and not self.should_update_router_for(ip):
@@ -213,61 +280,11 @@ class RouteManager:
         if len(hops) < 2:
             log.debug('Path to %s had too few responsive routers', ipstr)
             return
-
-        now = time.monotonic()
-        # If initial ip was to host, the actual router has now revealed itself
-        router_ip = cast(HopMetric, hops[-1]).ip
-        if not self.should_update_router_for(router_ip, now):
-            if log.getEffectiveLevel() <= logging.DEBUG:
-                log.debug('Not updating router %s', socket.inet_ntoa(router_ip))
-            return
-
-        # Update routing
-        last_router = None
-        announcements = []
-        for ndx, hop in enumerate(hops):
-            if hop is None:
-                continue
-            if hop.ip in self.routers:
-                router = self.routers[hop.ip]
-                announce = router.update(hop.rtt, now)
-            else:
-                # New router
-                router = Router(ip = hop.ip, rtt = hop.rtt, hops = ndx + 1, ts = now)
-                self.routers[hop.ip] = router
-                announce = True
-            if last_router:
-                last_router.add_route(router)
-
-            last_router = router
-            if announce:
-                announcements.append(router)
-        # Now we wait..
-        current_time_ms = int(time.time() * 1000)
-        success = await asyncio.gather(*list(map(lambda r: self.dht.set_metric(r.ip,
-                                                                               self._make_metric(r, current_time_ms)),
-                                                  announcements)))
-        now = time.monotonic()
-        if not all(success):
-            if not any(success):
-                log.error('Failure to insert routers, network connection error?')
-            else:
-                log.error('Some route updates failed?')
-        for (success, router) in zip(success, announcements):
-            if log.getEffectiveLevel() <= logging.DEBUG:
-                log.debug('Router %s %s updated',
-                          socket.inet_ntoa(router.ip),
-                          'successfully' if success else 'unsuccessfully')
-            if success:
-                router.mark_updated(now)
-
-        # Preserve this route
-        last_router = announcements[-1]
-        if last_router.is_edge():
-            self.edge_routers.add(last_router)
+        await self._update_routes(hops)
 
     async def _refresh_routes(self):
         """ Walk thorugh all edge routers and check if they need refreshing """
+        log.debug('Refreshing routes')
         # TODO: How to avoid this copy without breaking concurrency
         for router in self.edge_routers.copy():
             await self._probe_route(router.ip)
@@ -282,7 +299,7 @@ class RouteManager:
     async def add_node(self, ip: str, port: int) -> bool:
         """ Add a DHT (bootstrap) node """
         nodelist = await self.dht.bootstrap([(ip, port)])
-        if not len(nodelist):
+        if nodelist:
             log.error('Bootstrap from %s:%d failed', ip, port)
             return False
         our_ip = self.dht.get_current_ip()
@@ -295,9 +312,71 @@ class RouteManager:
             log.info('Added node %s:%d', node_ip, node_port)
         return True
 
-    def find_orchestrators(self, ip: str):
+    async def find_orchestrators(self, address: str) -> list[DistanceMetric]:
         """ Find orchestrators closest to ip """
-        ...
+
+        if self.dht.get_current_ip() is None:
+            log.error('Cannot find orchestrators: DHT is not initialized yet')
+            return []
+        ip, ipstr = ipselect(address)
+        hops = await self.traceroute.get_traceroute(ipstr)
+
+        # Don't bother with short routes, this host is the perfect match there
+        if len(hops) < 2:
+            return []
+        # We remove the target node, but the RTT is still important
+        last_rtt = int(cast(HopMetric, hops[-1]).rtt * 1000)  # NB: Last item is guaranteed to be valid
+        if cast(HopMetric, hops[-1]).ip == ip:
+            hops.pop()
+        # Make sure that the current network view is updated for a fair
+        # comparison of orchestrators
+        await self._update_routes(hops)
+
+        # Gather max 10 last hops. Seeking further away is futile from a latency standpoint
+        routers = cast(list[HopMetric], list(filter(None, hops[-10:])))  # Remove Nones
+        if len(routers) < 1:
+            return []
+        results = await asyncio.gather(*list(map(lambda r: self.dht.get_metrics(r.ip), routers)))
+        best_metrics: dict[bytes, DistanceMetric] = {}
+        for ndx, (router, result) in enumerate(zip(routers, results)):
+            if result is None:
+                if log.getEffectiveLevel() <= logging.DEBUG:
+                    log.debug('Skipping router %s - no result?', socket.inet_ntoa(router.ip))
+                continue
+            # We are really interesed in the approx RTT from the target address
+            router_rtt = int(router.rtt * 1000)
+            reverse_rtt = last_rtt - router_rtt
+            for metric in result:
+                if log.getEffectiveLevel() <= logging.DEBUG:
+                    log.debug('%s -> %s RTT %d ms (our: %d)',
+                              socket.inet_ntoa(router.ip),
+                              socket.inet_ntoa(metric.ip),
+                              metric.rtt,
+                              router_rtt)
+
+                # Only include "better" routes
+                if metric.rtt < router_rtt:
+                    # The estimated RTT from router to target
+                    rtt = metric.rtt + reverse_rtt
+                    if metric.ip in best_metrics:
+                        if best_metrics[metric.ip].rtt < rtt:
+                            continue
+                    # NB: Hops is a bit off, but it's not really that important
+                    new = DistanceMetric(rtt = rtt,
+                                         hops = metric.hops + len(results) - ndx,
+                                         ip = metric.ip,
+                                         port = metric.port,
+                                         ts = metric.ts)
+                    best_metrics[metric.ip] = new
+
+        # The local node will also have a "real" entry, but to help filtering
+        # "best" matches, also include this dummy metric
+        best_metrics[LOCAL_NODE_ADDRESS] = DistanceMetric(rtt = last_rtt,
+                                                          hops = len(hops),
+                                                          ip = LOCAL_NODE_ADDRESS,
+                                                          port = 0,
+                                                          ts = 0)
+        return list(sorted(best_metrics.values(), key = lambda metric: metric.rtt))
 
     async def _run(self):
         log.debug('Starting manager')

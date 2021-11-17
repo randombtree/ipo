@@ -13,6 +13,8 @@ import asyncio
 
 from typing import Any, Optional
 
+from kademlia.crawling import ValueSpiderCrawl
+from kademlia.utils import digest
 from kademlia.network import Server as KademliaServer  # type: ignore
 from kademlia.protocol import KademliaProtocol         # type: ignore
 from kademlia.node import Node                         # type: ignore
@@ -23,6 +25,7 @@ from . storage import (
     DistanceMetric,
     unpack_metrics,
     pack_metrics,
+    str_metrics,
 )
 
 log = logging.getLogger(__name__)
@@ -107,6 +110,19 @@ class IPOKademliaProtocol(KademliaProtocol, Emitter):
         self.NewNode(ip = node.ip)
 
 
+ROUTER_MASK = ((1 << 32) - 1) ^ 7   # Mask lower 3 bits
+
+
+async def get_router_net(ip: bytes) -> bytes:
+    """
+    Get the router net address. Currently just a hack that works(TM) most of the time.
+    """
+    # FIXME: Real world deployments would need a proper way to find common hop
+    #        addresses.
+    # Mask away 3 bits from address and hope it works.
+    return (int.from_bytes(ip, byteorder = 'big') & ROUTER_MASK).to_bytes(4, byteorder = 'big')
+
+
 class IPOKademliaServer(KademliaServer):
     """ A slightly modified kademlia server in regards with our specific needs """
     state_file: str
@@ -136,21 +152,86 @@ class IPOKademliaServer(KademliaServer):
             asyncio.create_task(self.bootstrap(self.bootstrap_list()),
                                 name = 'kademlia_bootstrap')
 
+    async def get(self, key):
+        """
+        Get a key if the network has it.
+        This is a slightly modified version from vanilla kademlia.
+
+        Returns:
+            :class:`None` if not found, the value otherwise.
+        """
+        dkey = digest(key)
+        log.debug("Looking up key %s, dkey %s", key, dkey)
+        # if this node has it, return it
+        has_key = dkey in self.storage
+        # So vanilla kademlia would be satisfied with the key in storage
+        # but I'm a little hesitant on relying on the coherency here
+        # IF we have it in the store, we should be the authorative source or
+        # at least close to it - so a lookup should be really fast.
+        # => Testing later revealed that local node data CAN be stale!
+        #    not sure if it's a bug in the Kademlia implementation or
+        #    or a limitation in the Kademlia protocol.
+        node = Node(dkey)
+        nearest = self.protocol.router.find_neighbors(node)
+        if not nearest:
+            log.warning("There are no known neighbors to get key %s", key)
+            return None
+        spider = ValueSpiderCrawl(self.protocol, node, nearest,
+                                  self.ksize, self.alpha)
+        value = await spider.find()
+        # Update local key (we slept, so storage could have culled the value)
+        has_key = dkey in self.storage
+        if has_key:
+            if value is not None:
+                # So just to see how often value divergence could happen in smaller networks
+                # (it shouldn't happen, but it does actually happen!)
+                old_value = self.storage[dkey]
+                if log.getEffectiveLevel() <= logging.DEBUG:
+                    if value != old_value:
+                        # Log with warning so it's easily greppable
+                        log.warning('Network data has diverged from local data in store')
+                        log.warning('Store: %s', str_metrics(unpack_metrics(old_value)))
+                        log.warning('\'net: %s', str_metrics(unpack_metrics(value)))
+                self.storage[dkey] = value
+                # So network data can also be stale :)
+                # Update network storage when this happens
+                if self.storage[dkey] != value:
+                    # Storage contained metrics not in network
+                    # (this can lead to uneccessary refreshes as we cull old entries)
+                    log.debug('Store and network disagree: Refreshing key in network')
+                    await self.set_digest(dkey, self.storage[dkey])
+            return self.storage[dkey]
+        return value
+
     async def get_metrics(self, router_ip: bytes) -> Optional[list[DistanceMetric]]:
         """
         Get the DistanceMetric:s for a router from DHT
         """
-        packed_metrics = await self.get(router_ip)
+        assert len(router_ip) == 4
+        # Routers can have several addresses, depending on which interface the probe arrives
+        # but luckily they usually share the network. A proper way would be to map the routers
+        # some other way, e.g. whois data But for now, we use a simple hack..
+        router_net = await get_router_net(router_ip)
+
+        if log.getEffectiveLevel() <= logging.DEBUG:
+            log.debug('Get from %s network %s',
+                      socket.inet_ntoa(router_ip), socket.inet_ntoa(router_net))
+        packed_metrics = await self.get(router_net)
         return None if packed_metrics is None else unpack_metrics(packed_metrics)
 
-    async def set_metric(self, router_ip, metric: DistanceMetric) -> bool:
+    async def set_metric(self, router_ip: bytes, metric: DistanceMetric) -> bool:
         """
         Store this node metric for a router into DHT
 
         Returns success
         """
+        assert len(router_ip) == 4
+        router_net = await get_router_net(router_ip)
+        if log.getEffectiveLevel() <= logging.DEBUG:
+            log.debug('Insert into %s network %s -> %s',
+                      socket.inet_ntoa(router_ip), socket.inet_ntoa(router_net), str_metrics([metric]))
         packed_metric = pack_metrics([metric])
-        return await self.set(router_ip, packed_metric)
+        return await self.set(router_net, packed_metric)
 
     async def bootstrap_node(self, addr):
         """
