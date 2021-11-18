@@ -175,6 +175,9 @@ class AsyncTaskRunner:
             for t in tasks:
                 yield t
 
+    def __aiter__(self):
+        return self.wait_next()
+
     async def waitany(self) -> Set[AsyncTask]:
         """ Wait for any completed tasks, returns list of AsyncTasks that completed """
         while True:
