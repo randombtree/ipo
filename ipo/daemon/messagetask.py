@@ -142,7 +142,7 @@ class MessageTaskDispatcher:
 
         self.quit_context = None
 
-    async def _process_messages(self) -> AsyncGenerator[Union[AsyncTask, IconMessage], None]:
+    async def _process_messages(self) -> AsyncGenerator[tuple[Union[AsyncTask, IconMessage], Queue], None]:
         """
         Process messages incoming. Generator will yield unhandled tasks and messages.
         Stops on shutdown, exception, or else caller must arrange a task to abort with.
@@ -167,7 +167,7 @@ class MessageTaskDispatcher:
                         msg_handlers[msg.msg_id] = handler
                     else:
                         log.debug('Not handling message %s', msg)
-                        yield msg
+                        yield (msg, self.flusher.queue)
             elif task in msg_tasks:
                 # Task finished
                 msg_tasks.remove(task)
@@ -175,7 +175,7 @@ class MessageTaskDispatcher:
                 return
             else:
                 log.debug('Not handling task %s', task)
-                yield task
+                yield (task, self.flusher.queue)
 
     def __enter__(self):
         if self.quit_context:
