@@ -37,7 +37,7 @@ class MessageTaskHandler(metaclass = ABCMeta):
     task: Union[None, asyncio.tasks.Task]
     icond: Icond
 
-    def __init__(self, outqueue: Queue, icond: Icond):
+    def __init__(self, outqueue: Queue, icond: Icond, **params):
         """
         outqueue: A queue where this handler can write messages to,
         """
@@ -45,6 +45,10 @@ class MessageTaskHandler(metaclass = ABCMeta):
         self.icond = icond
         self.events = Queue()
         self.task = None
+        for k, v in params.items():
+            if hasattr(self, k):
+                raise RuntimeError(f'Invalid parameter {self} already has {k} defined')
+            setattr(self, k, v)
 
     def post(self, msg: IconMessage):
         """ Post a new message to the handler """
@@ -114,6 +118,7 @@ class MessageTaskDispatcher:
     reader: MessageReader
     handlers: MessageToHandler
     icond: Icond
+    handler_params: dict[str, Any]
     runner: AsyncTaskRunner
 
     flusher_task: Optional[AsyncTask]
@@ -122,11 +127,12 @@ class MessageTaskDispatcher:
 
     quit_context: Any
 
-    def __init__(self, reader: StreamReader, writer: StreamWriter, handlers: MessageToHandler, icond: Icond):
+    def __init__(self, reader: StreamReader, writer: StreamWriter, handlers: MessageToHandler, icond: Icond, **handler_params):
         self.flusher = MessageFlusher(writer)
         self.reader = MessageReader(reader)
         self.handlers = handlers
         self.icond = icond
+        self.handler_params = handler_params
 
         self.runner = AsyncTaskRunner()
 
@@ -155,7 +161,7 @@ class MessageTaskDispatcher:
                 else:
                     t = type(msg)
                     if t in self.handlers:
-                        handler = self.handlers[t](self.flusher.queue, self.icond)
+                        handler = self.handlers[t](self.flusher.queue, icond = self.icond, **self.handler_params)
                         msg_tasks.add(self.runner.run(handler.handler(msg),
                                                       restartable = False))
                         msg_handlers[msg.msg_id] = handler
