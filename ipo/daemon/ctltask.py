@@ -18,6 +18,12 @@ from . container import ContainerState
 log = logging.getLogger(__name__)
 
 
+class ShutdownTask(MessageTaskHandler):
+    """ Command daemon shutdown """
+    async def handler(self, initial_msg: message.IconMessage):
+        self.icond.do_shutdown()
+
+
 class ContainerRunTask(MessageTaskHandler):
     """ Run (start) container from image """
     async def handler(self, initial_msg: message.IconMessage):
@@ -95,6 +101,7 @@ class FindOrchestratorTask(MessageTaskHandler):
 
 # Message -> Handler
 CTL_HANDLERS = {
+    message.Shutdown: ShutdownTask,
     message.ContainerRun: ContainerRunTask,
     message.ContainerLs: ContainerLsTask,
     message.BootstrapNode: BootstrapNodeTask,

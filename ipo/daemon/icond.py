@@ -15,6 +15,7 @@ from . events import ShutdownEvent
 from . state import Icond
 from ..api.message import (IconMessage, InvalidMessage, JSONReader, JSONWriter)
 from ..api import message
+from . messagetask import MessageTaskDispatcher
 from . ctltask import CTL_HANDLERS, MessageTaskHandler
 from ..util.asynctask import AsyncTask, AsyncTaskRunner, waitany
 from . signals import set_signal_handlers
@@ -25,108 +26,9 @@ log = logging.getLogger(__name__)
 
 async def iconctl_connection_handler(reader, writer, icond: Icond):
     """ Icon control channel handler """
-    reader = JSONReader(reader)
-    writer = JSONWriter(writer)
-    msg_handlers = dict()  # type: dict[str, MessageTaskHandler]  # msg_id -> TaskObject
-    msg_tasks    = dict()  # type: dict[AsyncTask, str]           # task -> msg_id
-    asyncrunner = AsyncTaskRunner()
-    outqueue = asyncio.Queue()  # type: asyncio.Queue   # Messages queued for transfer
-
-    async def outqueue_flusher():
-        """
-        All outbound traffic goes thru the outqueue. In this coroutine
-        we flush the queue to the real pipe.
-        """
-        while True:
-            msg = await outqueue.get()
-            if isinstance(msg, ShutdownEvent):
-                return
-            await writer.write(msg)
-            outqueue.task_done()
-
-    with icond.subscribe_event(ShutdownEvent) as shutdown_event:
-        # The shutdown message helps us to tear down the connection
-        # while waiting for peer actions (i.e. reading, writing)
-        shutdown_task = AsyncTask(shutdown_event.get, restartable = False)
-        asyncrunner.start_task(shutdown_task)
-        # The reader is always active to receive new messages
-        read_task = AsyncTask(reader.read)
-        asyncrunner.start_task(read_task)
-
-        flush_task = AsyncTask(outqueue_flusher, restartable = False)
-        asyncrunner.start_task(flush_task)
-        while not icond.shutdown:
-            completed = await asyncrunner.waitany()
-            if shutdown_task in completed:
-                assert isinstance(shutdown_task.result(), ShutdownEvent)
-                # TODO: Graceful shutdown to client
-                break
-
-            # If the queue flusher dies there is no receiver left, just quit
-            if flush_task in completed:
-                # Yeah, could do some diagnostics what happened.. whatever :)
-                e = flush_task.exception()
-                log.debug('Client closed the receive end (connection died?) {e}')
-                break
-
-            # There was something to read
-            if read_task in completed:
-                completed.remove(read_task)
-                e = read_task.exception()
-                if e is not None:
-                    # Task threw exception, connection probably died
-                    log.debug('Connection error %s: %s', e.__class__.__name__, e)
-                    break
-                try:
-                    msg = read_task.result()
-                    log.debug('Got line %s', msg)
-                    msg = IconMessage.from_dict(msg)
-                    log.debug('Received message: %s', msg)
-                    if isinstance(msg, message.Shutdown):
-                        log.info('Shutting down')
-                        reply_msg = msg.create_reply(msg = 'Shutting down')
-                        await outqueue.put(reply_msg)
-                        await outqueue.join()  # Flush outqueue
-                        icond.do_shutdown()
-                    elif msg.msg_id in msg_handlers:
-                        log.debug('Posting message to existing handler')
-                        msg_handlers[msg.msg_id].post(msg)
-                    else:
-                        # New task 'connection'
-                        t = type(msg)
-                        if t in CTL_HANDLERS:
-                            handler = CTL_HANDLERS[t](outqueue, icond)
-                            task = AsyncTask(lambda: handler.run(msg), restartable = False)
-                            asyncrunner.start_task(task)
-                            msg_tasks[task] = msg.msg_id
-                            msg_handlers[msg.msg_id] = handler
-                        else:
-                            log.warning('Not handling message %s',  msg)
-
-                except (json.JSONDecodeError, InvalidMessage) as e:
-                    log.warning('Invalid message: %s', e)
-                    reply_msg = message.Error(msg = str(e))
-                    await outqueue.put(reply_msg)
-
-            # A task handler finished?
-            for task in completed:
-                if task not in msg_tasks:
-                    log.error('Unknown task finished? Unhandled: %s', task)
-                    continue
-                # Just cleanup
-                msg_id = msg_tasks[task]
-                handler = msg_handlers[msg_id]
-                del msg_handlers[msg_id]
-                del msg_tasks[task]
-                log.debug('Handler %s finished', handler)
-        # Make sure to output writer quits
-        await outqueue.put(ShutdownEvent())
-        await flush_task.asynctask
-    # Make sure we cancel all left-over tasks
-    asyncrunner.clear()
-    reader.close()
-    writer.close()
-    log.debug('Connection closed')
+    with MessageTaskDispatcher(reader, writer, CTL_HANDLERS, icond) as dispatcher:
+        async for unhandled in dispatcher:
+            log.error('Unhandled %s', unhandled)
 
 
 def iconctl_connection_factory(icond: Icond):
