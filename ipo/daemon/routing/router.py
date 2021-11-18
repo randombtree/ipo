@@ -174,7 +174,7 @@ class RouteManager:
         # In no case should we be making metrics without knowing
         # our IP
         assert ip is not None
-        return DistanceMetric(rtt = int(router.min_rtt * 1000),
+        return DistanceMetric(rtt = router.min_rtt,
                               hops = router.hops,
                               ip = ip,
                               port = int(self.config.port),
@@ -207,7 +207,7 @@ class RouteManager:
                 announce = router.update(hop.rtt, now)
             else:
                 # New router
-                router = Router(ip = hop.ip, rtt = hop.rtt, hops = ndx + 1, ts = now)
+                router = Router(ip = hop.ip, rtt = int(hop.rtt * 1000), hops = ndx + 1, ts = now)
                 self.routers[hop.ip] = router
                 announce = True
             if last_router:
@@ -233,9 +233,10 @@ class RouteManager:
                 log.error('Some route updates failed?')
         for (success, router) in zip(success, announcements):
             if log.getEffectiveLevel() <= logging.DEBUG:
-                log.debug('Router %s %s updated',
+                log.debug('Router %s %s updated, rtt: %d, hops %d',
                           socket.inet_ntoa(router.ip),
-                          'successfully' if success else 'unsuccessfully')
+                          'successfully' if success else 'unsuccessfully',
+                          router.min_rtt, router.hops)
             if success:
                 router.mark_updated(now)
 
@@ -326,6 +327,7 @@ class RouteManager:
             return []
         # We remove the target node, but the RTT is still important
         last_rtt = int(cast(HopMetric, hops[-1]).rtt * 1000)  # NB: Last item is guaranteed to be valid
+        last_count = len(hops)
         if cast(HopMetric, hops[-1]).ip == ip:
             hops.pop()
         # Make sure that the current network view is updated for a fair
@@ -333,29 +335,30 @@ class RouteManager:
         await self._update_routes(hops)
 
         # Gather max 10 last hops. Seeking further away is futile from a latency standpoint
-        routers = cast(list[HopMetric], list(filter(None, hops[-10:])))  # Remove Nones
-        if len(routers) < 1:
+        last_hops = cast(list[HopMetric], list(filter(None, hops[-10:])))  # Remove Nones
+        del hops
+        if len(last_hops) < 1:
             return []
-        results = await asyncio.gather(*list(map(lambda r: self.dht.get_metrics(r.ip), routers)))
+        results = await asyncio.gather(*list(map(lambda r: self.dht.get_metrics(r.ip), last_hops)))
         best_metrics: dict[bytes, DistanceMetric] = {}
-        for ndx, (router, result) in enumerate(zip(routers, results)):
+        for ndx, (hop, result) in enumerate(zip(last_hops, results)):
             if result is None:
                 if log.getEffectiveLevel() <= logging.DEBUG:
-                    log.debug('Skipping router %s - no result?', socket.inet_ntoa(router.ip))
+                    log.debug('Skipping router %s - no result?', socket.inet_ntoa(hop.ip))
                 continue
             # We are really interesed in the approx RTT from the target address
-            router_rtt = int(router.rtt * 1000)
-            reverse_rtt = last_rtt - router_rtt
+            hop_rtt = int(hop.rtt * 1000)
+            reverse_rtt = last_rtt - hop_rtt
             for metric in result:
                 if log.getEffectiveLevel() <= logging.DEBUG:
                     log.debug('%s -> %s RTT %d ms (our: %d)',
-                              socket.inet_ntoa(router.ip),
+                              socket.inet_ntoa(hop.ip),
                               socket.inet_ntoa(metric.ip),
                               metric.rtt,
-                              router_rtt)
+                              hop_rtt)
 
                 # Only include "better" routes
-                if metric.rtt < router_rtt:
+                if metric.rtt < hop_rtt:
                     # The estimated RTT from router to target
                     rtt = metric.rtt + reverse_rtt
                     if metric.ip in best_metrics:
@@ -372,7 +375,7 @@ class RouteManager:
         # The local node will also have a "real" entry, but to help filtering
         # "best" matches, also include this dummy metric
         best_metrics[LOCAL_NODE_ADDRESS] = DistanceMetric(rtt = last_rtt,
-                                                          hops = len(hops),
+                                                          hops = last_count,
                                                           ip = LOCAL_NODE_ADDRESS,
                                                           port = 0,
                                                           ts = 0)
