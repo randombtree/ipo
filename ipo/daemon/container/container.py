@@ -21,6 +21,7 @@ from .. events import (
 )
 from ...api import message
 from ...api.message import (MessageReader, JSONWriter)
+from ..messagetask import MessageTaskDispatcher
 
 
 log = logging.getLogger(__name__)
@@ -121,33 +122,35 @@ class Container:
     async def handle_connection(self, reader, writer):
         """ Handle client connection """
         log.debug('Client connected to %s', self.name)
-        reader = MessageReader(reader)
-        writer = JSONWriter(writer)
-        self.clients += 1
-        try:
-            msg = await reader.read()
-            if isinstance(msg, message.ClientHello):
-                await writer.write(msg.create_reply(version = '0.0.1'))
-                if self.clients == 1:
-                    self.emit_state(ContainerState.RUNNING)
-                log.debug('%s: Client handshake completed', self.name)
-            else:
-                log.error('Invalid handshake message')
-                raise message.InvalidMessage(f'Expected ClientHello, got {msg}')
-            while True:
-                msg = await reader.read()
-
-        except (json.JSONDecodeError, message.InvalidMessage) as e:
-            log.error('%s: Error communicating with client: %s', self.name, e)
+        hello_received = False
+        with MessageTaskDispatcher(reader, writer, {}, self.icond, container = self) as dispatcher:
+            async for unhandled, outqueue in dispatcher:
+                if not hello_received:
+                    if isinstance(unhandled, message.ClientHello):
+                        msg = unhandled
+                        hello_received = True
+                        log.debug('%s: Client handshake completed', self.name)
+                        await outqueue.put(msg.create_reply(version = '0.0.1'))
+                        self.clients += 1
+                        if self.clients == 1:
+                            self.emit_state(ContainerState.RUNNING)
+                    else:
+                        log.error('Invalid handshake message %s', unhandled)
+                        break
+                elif isinstance(unhandled, message.IconMessage):
+                    # There is no pretty way to go about this, just disconnect
+                    log.warning('Invalid message %s', unhandled)
+                    break
+                else:
+                    e = unhandled.exception()
+                    log.error('Task %s died? %s', unhandled, e)
+                    break
+        if hello_received:
             self.clients -= 1
             if self.clients == 0:
-                # This state change can be redundant if no Hello message was received
-                # but it's ok.
                 self.emit_state(ContainerState.CONWAITING)
 
-        reader.close()
-        writer.close()
-        log.error('%s: Client disconnected', self.name)
+        log.debug('Client disconnected')
 
     async def _run(self):
         # Is it an existing container?
