@@ -249,6 +249,13 @@ class MessageTaskDispatcher:
         self.flusher.close()
         if self.icond:
             self.quit_context.__exit__(exc_type, exc_value, traceback)
+        # Suppress asyncio debug splat
+        # This happens with the shutdown message at least
+        # when the shutdown event races with the closing socket
+        if self.reader_task.is_running():
+            await asyncio.wait([self.reader_task.asynctask])
+        self.reader_task.exception()
+
         log.debug('Finished..')
         return suppress_exc
 
