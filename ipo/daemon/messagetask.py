@@ -166,6 +166,10 @@ class MessageTaskDispatcher:
         self.msg_handlers = {}
         self.msg_tasks = set()
 
+    async def write(self, msg: IconMessage):
+        """ Write a message to the output stream """
+        await self.flusher.queue.put(msg)
+
     async def _process_messages(self) -> AsyncGenerator[tuple[Union[AsyncTask, IconMessage], Queue], None]:
         """
         Process messages incoming. Generator will yield unhandled tasks and messages.
