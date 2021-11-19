@@ -10,16 +10,16 @@ from typing import (
     AsyncGenerator,
     Coroutine,
 )
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Iterable
 from inspect import iscoroutinefunction
 
 
 WaitSet = tuple[Set[Task], Set[Task]]  # Set returned from waitany
 
 
-async def waitany(tset: Set[Task]) -> WaitSet:
+async def waitany(aws: Iterable[Task]) -> WaitSet:
     """ Convinience function to wait for any async task completion """
-    ret = await asyncio.wait(tset, return_when = asyncio.FIRST_COMPLETED)
+    ret = await asyncio.wait(aws, return_when = asyncio.FIRST_COMPLETED)
     return cast(WaitSet, ret)  # We only take in Task:s so this is safe
 
 
