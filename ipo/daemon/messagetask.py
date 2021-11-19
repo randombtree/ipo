@@ -135,7 +135,7 @@ class MessageTaskDispatcher:
     flusher: MessageFlusher
     reader: MessageReader
     handlers: MessageToHandler
-    icond: Icond
+    icond: Optional[Icond]
     handler_params: dict[str, Any]
     runner: AsyncTaskRunner
 
@@ -148,7 +148,11 @@ class MessageTaskDispatcher:
     msg_handlers: dict[str, MessageTaskHandler]
     msg_tasks: set[AsyncTask]
 
-    def __init__(self, reader: StreamReader, writer: StreamWriter, handlers: MessageToHandler, icond: Icond, **handler_params):
+    def __init__(self, reader: StreamReader, writer: StreamWriter, handlers: MessageToHandler, icond: Optional[Icond], **handler_params):
+        """
+        If Icond is provided, will watch for shutdown event and exit gracefully when that happens. Else the
+        caller must handle it self (e.g. cancel)
+        """
         self.flusher = MessageFlusher(writer)
         self.reader = MessageReader(reader)
         self.handlers = handlers
@@ -211,14 +215,15 @@ class MessageTaskDispatcher:
                 yield (task, self.flusher.queue)
 
     async def __aenter__(self):
-        if self.quit_context:
+        if self.flusher_task is not None:
             raise RuntimeError('Cannot re-enter context!')
         self.flusher_task = self.runner.run(self.flusher.run, restartable = False)
         self.reader_task = self.runner.run(self.reader.read)
 
-        self.quit_context = self.icond.subscribe_event(ShutdownEvent)
-        quit_queue = self.quit_context.__enter__()
-        self.shutdown_task = self.runner.run(quit_queue.get, restartable = False)
+        if self.icond:
+            self.quit_context = self.icond.subscribe_event(ShutdownEvent)
+            quit_queue = self.quit_context.__enter__()
+            self.shutdown_task = self.runner.run(quit_queue.get, restartable = False)
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
@@ -242,11 +247,12 @@ class MessageTaskDispatcher:
         # Cancel remainders
         self.runner.clear()
         self.flusher.close()
-        self.quit_context.__exit__(exc_type, exc_value, traceback)
+        if self.icond:
+            self.quit_context.__exit__(exc_type, exc_value, traceback)
         log.debug('Finished..')
         return suppress_exc
 
     def __aiter__(self):
-        if not self.quit_context:
+        if self.flusher_task is None:
             raise RuntimeError('Use context manager before iterating!')
         return self._process_messages()
