@@ -3,11 +3,13 @@ A Common message task handler meant to handle new incoming messages and help wit
 multiplexing connection id's.
 """
 import asyncio
-from asyncio import Queue
+from asyncio import Queue, Task
 from asyncio.streams import StreamReader, StreamWriter
+import itertools
 import logging
 
 from abc import ABCMeta, abstractmethod
+from collections.abc import Iterable
 
 from typing import (
     Union,
@@ -25,7 +27,7 @@ from . state import Icond
 from ..api import message
 from ..api.message import IconMessage, JSONWriter, MessageReader
 
-from ..util.asynctask import AsyncTask, AsyncTaskRunner
+from ..util.asynctask import AsyncTask, AsyncTaskRunner, waitany
 
 log = logging.getLogger(__name__)
 
@@ -102,9 +104,25 @@ class MessageFlusher:
             await self.writer.write(msg)
             self.queue.task_done()
 
+    async def drain(self, aws: Iterable[Task] = iter([])):
+        """
+        Drain the out-queue.
+        aws: Give up drain if one of these exit (ex. timeout and/or flusher task),
+             the aws tasks will be canceled when finished!
+        """
+        # Wait a while for the drain
+        _, pending = await waitany(itertools.chain(aws, [asyncio.create_task(self.queue.join())]))
+        for task in pending:
+            task.cancel()
+
     def close(self):
         """ Close writer """
         self.writer.close()
+
+
+class ConnectionClosedException(Exception):
+    """ Connection closed """
+    ...
 
 
 class MessageTaskDispatcher:
@@ -127,6 +145,9 @@ class MessageTaskDispatcher:
 
     quit_context: Any
 
+    msg_handlers: dict[str, MessageTaskHandler]
+    msg_tasks: set[AsyncTask]
+
     def __init__(self, reader: StreamReader, writer: StreamWriter, handlers: MessageToHandler, icond: Icond, **handler_params):
         self.flusher = MessageFlusher(writer)
         self.reader = MessageReader(reader)
@@ -142,19 +163,22 @@ class MessageTaskDispatcher:
 
         self.quit_context = None
 
+        self.msg_handlers = {}
+        self.msg_tasks = set()
+
     async def _process_messages(self) -> AsyncGenerator[tuple[Union[AsyncTask, IconMessage], Queue], None]:
         """
         Process messages incoming. Generator will yield unhandled tasks and messages.
         Stops on shutdown, exception, or else caller must arrange a task to abort with.
         """
-        msg_handlers: dict[str, MessageTaskHandler] = {}
-        msg_tasks: set[AsyncTask] = set()
+        msg_handlers = self.msg_handlers
+        msg_tasks = self.msg_tasks
         async for task in self.runner:
             if task == self.reader_task:
-                if task.exception():
-                    log.debug('Connection closed')
-                    self.reader.close()
-                    return
+                e = task.exception()
+                if e:
+                    log.debug('Reader closed')
+                    raise ConnectionClosedException() from e
                 msg = task.result()
                 if msg.msg_id in msg_handlers:
                     msg_handlers[msg.msg_id].post(msg)
@@ -168,6 +192,11 @@ class MessageTaskDispatcher:
                     else:
                         log.debug('Not handling message %s', msg)
                         yield (msg, self.flusher.queue)
+            elif task == self.flusher_task:
+                # Flusher can currently only exit with exception
+                e = task.exception()
+                log.debug('Flusher closed')
+                raise ConnectionClosedException() from e
             elif task in msg_tasks:
                 # Task finished
                 msg_tasks.remove(task)
@@ -177,7 +206,7 @@ class MessageTaskDispatcher:
                 log.debug('Not handling task %s', task)
                 yield (task, self.flusher.queue)
 
-    def __enter__(self):
+    async def __aenter__(self):
         if self.quit_context:
             raise RuntimeError('Cannot re-enter context!')
         self.flusher_task = self.runner.run(self.flusher.run, restartable = False)
@@ -188,10 +217,30 @@ class MessageTaskDispatcher:
         self.shutdown_task = self.runner.run(quit_queue.get, restartable = False)
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        self.reader.close()
+        # Make sure handlers listening for messages shut down orderly
+        for handler in self.msg_handlers.values():
+            handler.shutdown()
+        # Some operations can take quite a while to finish in task handlers
+        # so we really don't want to start canceling stuff that might lead to
+        # really weird mid-states.
+        log.debug('Waiting for tasks to finish')
+        if self.msg_tasks:
+            await asyncio.wait(map(lambda t: t.asynctask, self.msg_tasks))
+        suppress_exc = False
+        if exc_type != ConnectionClosedException:
+            # Try drain for 1.5 secs
+            await self.flusher.drain([self.flusher_task.asynctask,
+                                      asyncio.create_task(asyncio.sleep(1.5))])
+        else:
+            suppress_exc = True
+        # Cancel remainders
         self.runner.clear()
         self.flusher.close()
         self.quit_context.__exit__(exc_type, exc_value, traceback)
+        log.debug('Finished..')
+        return suppress_exc
 
     def __aiter__(self):
         if not self.quit_context:

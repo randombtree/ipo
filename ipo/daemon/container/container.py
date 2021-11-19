@@ -123,7 +123,7 @@ class Container:
         """ Handle client connection """
         log.debug('Client connected to %s', self.name)
         hello_received = False
-        with MessageTaskDispatcher(reader, writer, {}, self.icond, container = self) as dispatcher:
+        async with MessageTaskDispatcher(reader, writer, {}, self.icond, container = self) as dispatcher:
             async for unhandled, outqueue in dispatcher:
                 if not hello_received:
                     if isinstance(unhandled, message.ClientHello):

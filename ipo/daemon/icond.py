@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 async def iconctl_connection_handler(reader, writer, icond: Icond):
     """ Icon control channel handler """
-    with MessageTaskDispatcher(reader, writer, CTL_HANDLERS, icond) as dispatcher:
+    async with MessageTaskDispatcher(reader, writer, CTL_HANDLERS, icond) as dispatcher:
         async for unhandled in dispatcher:
             log.error('Unhandled %s', unhandled)
 
