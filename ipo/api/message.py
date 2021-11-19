@@ -158,6 +158,9 @@ class IconMessage(metaclass = MessageRegistry):
         """ De-serialize from json """
         return cls.from_dict(json.loads(source))
 
+    def __str__(self):
+        return f'{self.__class__.__name__}: {self.msg_id} {self.data}'
+
 
 class Reply(IconMessage):
     """ Reply message """
