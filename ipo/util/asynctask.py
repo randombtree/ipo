@@ -100,9 +100,13 @@ class AsyncTask:
         assert self._asynctask.done()
         return self._asynctask.exception()
 
+    def is_running(self):
+        """ Is the task currently running (or has it finished) """
+        return self._asynctask is not None and not self._asynctask.done()
+
     def cancel(self):
         """ Cancel the underlying asyncio Task """
-        if self._asynctask is not None and not self._asynctask.done():
+        if self.is_running():
             self._asynctask.cancel()
 
 
