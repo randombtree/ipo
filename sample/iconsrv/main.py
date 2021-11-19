@@ -99,8 +99,9 @@ async def web_init(argv):
     connect_waitqueue  = asyncio.Queue()
     icon_client.Connected.connect(connect_waitqueue)
     await icon_client.connect()
+    _event = await connect_waitqueue.get()
+    connect_waitqueue.task_done()
     log.info('Connected to ICON')
-    event = await connect_waitqueue.get()
     app = web.Application()
     app.add_routes(routes)
     return app
