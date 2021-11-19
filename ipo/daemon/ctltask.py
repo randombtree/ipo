@@ -22,6 +22,7 @@ class ShutdownTask(MessageTaskHandler):
     """ Command daemon shutdown """
     async def handler(self, initial_msg: message.IconMessage):
         self.icond.do_shutdown()
+        await self.outqueue.put(initial_msg.create_reply(msg = 'Shutting down'))
 
 
 class ContainerRunTask(MessageTaskHandler):
