@@ -40,7 +40,6 @@ class Container:
     task: Union[None, asyncio.Task]  # The running task
     state: ContainerState
     inqueue: asyncio.Queue
-    task_runner: AsyncTaskRunner
     container_name: str
     control_path: str         # Path to mount into container
     control_socket_path: str  # Container control socket name
@@ -60,7 +59,6 @@ class Container:
         self.task = None
         self.state = ContainerState.STOPPED
         self.inqueue = asyncio.Queue()
-        self.task_runner = AsyncTaskRunner()
         self.container_name = f'ICON_{self.name}'
         self.icond.eventqueue.listen(ShutdownEvent, self.inqueue)
         # Create container control path that is mounted inside the container NS
@@ -194,14 +192,15 @@ class Container:
             return
         # Initializing socket "late"; client API must be able to handle
         # waiting for the appearance of the socket (or re-connecting)
+        task_runner = AsyncTaskRunner()
         consrv_task = await self._init_socket()
-        self.task_runner.start_task(consrv_task)
+        task_runner.start_task(consrv_task)
         # Now we have to wait for the client to connect
         self.state = ContainerState.CONWAITING
         self.emit_state()
         command_task = AsyncTask(self.inqueue.get)
-        self.task_runner.start_task(command_task)
-        async for task in self.task_runner.wait_next():
+        task_runner.start_task(command_task)
+        async for task in task_runner.wait_next():
             if self.icond.shutdown:
                 break
             if task == command_task:
@@ -215,6 +214,6 @@ class Container:
             self.inqueue.task_done()
         await container.stop()
         # Make sure there aren't any weird left-overs for next run
-        self.task_runner.clear()
+        task_runner.clear()
         self.state = ContainerState.STOPPED
         self.emit_state()
