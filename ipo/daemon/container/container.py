@@ -152,7 +152,8 @@ class Container:
 
         log.debug('Client disconnected')
 
-    async def _run(self):
+    async def _start_container(self):
+        """ Start container """
         # Is it an existing container?
         # TODO: This might be uneccessary if ipo gains some persitent memory over restarts
         d = self.icond.docker
@@ -183,6 +184,13 @@ class Container:
         except docker.errors.APIError:
             self.state = ContainerState.FAILED
             self.emit_state()
+            return
+        return container
+
+    async def _run(self):
+        container = await self._start_container()
+        if container is None:
+            log.error('Failed to start container')
             return
         # Initializing socket "late"; client API must be able to handle
         # waiting for the appearance of the socket (or re-connecting)
