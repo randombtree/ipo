@@ -74,7 +74,7 @@ class IconMessage(metaclass = MessageRegistry):
     data: dict[str, str]
     msg_id: uuid.UUID
 
-    def __init__(self, /, msg_id = None, **data):
+    def __init__(self, *, msg_id = None, **data):
         self.data = data.copy()
 
         self.msg_id = \
