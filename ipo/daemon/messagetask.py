@@ -17,6 +17,7 @@ from typing import (
     Optional,
     Any,
     AsyncGenerator,
+    Mapping,
 )
 
 from . events import (
@@ -80,6 +81,7 @@ class MessageTaskHandler(metaclass = ABCMeta):
         ...
 
 
+MessageHandlerMapping = Mapping[Type[message.IconMessage], Type[MessageTaskHandler]]
 # Can be used in annotating mappings Message -> Handler
 MessageToHandler = dict[Type[message.IconMessage], Type[MessageTaskHandler]]
 
@@ -173,6 +175,10 @@ class MessageTaskDispatcher:
     async def write(self, msg: IconMessage):
         """ Write a message to the output stream """
         await self.flusher.queue.put(msg)
+
+    def add_handlers(self, handlers: MessageHandlerMapping):
+        """ Add new message handlers """
+        self.handlers.update(handlers)
 
     async def _process_messages(self) -> AsyncGenerator[tuple[Union[AsyncTask, IconMessage], Queue], None]:
         """
