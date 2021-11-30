@@ -57,6 +57,9 @@ class MessageTaskHandler(metaclass = ABCMeta):
         """ Post a new message to the handler """
         self.events.put_nowait(MessageEvent(msg))
 
+    async def _send(self, msg: IconMessage):
+        await self.outqueue.put(msg)
+
     def shutdown(self):
         """ Order this handler to quit asap """
         self.events.put_nowait(ShutdownEvent())
@@ -71,6 +74,9 @@ class MessageTaskHandler(metaclass = ABCMeta):
         """
         self.task = asyncio.create_task(self.handler(initial_msg))
         return self.task
+
+    def __await__(self):
+        yield from self.events.get().__await__()
 
     @abstractmethod
     async def handler(self, initial_msg: message.IconMessage):
