@@ -240,6 +240,7 @@ class MessageTaskDispatcher:
                     log.debug('Reader closed')
                     raise ConnectionClosedException() from e
                 msg = task.result()
+                log.debug('Received message %s', msg)
                 if msg.msg_id in msg_handlers:
                     msg_handlers[msg.msg_id].post(msg)
                 else:
