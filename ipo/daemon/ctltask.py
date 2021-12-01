@@ -95,6 +95,7 @@ class FindOrchestratorTask(MessageTaskHandler):
         ip = initial_msg.ip
         result = await self.icond.router.find_orchestrators(ip)
         listing = list(map(lambda metric: dict(ip = socket.inet_ntoa(metric.ip),
+                                               port = metric.port,
                                                rtt = metric.rtt), result))
         reply_msg = initial_msg.create_reply(metrics = listing)
         await self.outqueue.put(reply_msg)
