@@ -76,7 +76,7 @@ class MessageTaskHandler(metaclass = ABCMeta):
         return self.task
 
     def __await__(self):
-        yield from self.events.get().__await__()
+        return self.events.get().__await__()
 
     @abstractmethod
     async def handler(self, initial_msg: message.IconMessage):
