@@ -21,7 +21,8 @@ from .. events import (
 )
 from ...api import message
 from ...api.message import (MessageReader, JSONWriter)
-from ..messagetask import MessageTaskDispatcher
+from ..messagetask import MessageTaskDispatcher, get_message_handlers
+from . import containertask
 
 
 log = logging.getLogger(__name__)
@@ -132,6 +133,8 @@ class Container:
                         self.clients += 1
                         if self.clients == 1:
                             self.emit_state(ContainerState.RUNNING)
+                        # Allow other messages to be handled after handshake
+                        dispatcher.add_handlers(get_message_handlers(containertask))
                     else:
                         log.error('Invalid handshake message %s', unhandled)
                         break
