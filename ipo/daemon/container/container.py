@@ -8,7 +8,6 @@ import asyncio
 from typing import Union, cast
 from enum import Enum
 import os.path
-import json
 import logging
 
 import docker  # type: ignore
@@ -20,7 +19,6 @@ from .. events import (
     ContainerRunningEvent,
 )
 from ...api import message
-from ...api.message import (MessageReader, JSONWriter)
 from ..messagetask import MessageTaskDispatcher, get_message_handlers
 from . import containertask
 
