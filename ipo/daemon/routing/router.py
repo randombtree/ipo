@@ -168,6 +168,11 @@ class RouteManager:
         self.traceroute.stop()
         await self.task
 
+    def get_current_ip(self):
+        """ Returns node active IP address """
+        # Rely on DHT for this for now
+        return self.dht.get_current_ip()
+
     def _make_metric(self, router: Router, current_time_ms: int) -> DistanceMetric:
         """ Make a distance metric for router """
         ip = self.dht.get_current_ip()
@@ -379,6 +384,10 @@ class RouteManager:
                                                           ip = LOCAL_NODE_ADDRESS,
                                                           port = 0,
                                                           ts = 0)
+        # And remove our own IP address
+        our_ip = self.get_current_ip()
+        if our_ip in best_metrics:
+            del best_metrics[our_ip]
         return list(sorted(best_metrics.values(), key = lambda metric: metric.rtt))
 
     async def _run(self):
