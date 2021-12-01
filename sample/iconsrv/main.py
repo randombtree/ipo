@@ -67,9 +67,12 @@ async def websocket_handler(request):
     if not isinstance(msg, UserHello):
         log.warning('Invalid hello from %s', request.remote)
         return ws
+    # Register this "user"
+    user = await icon_client.new_user(request.remote)
     await ms.send(UserHelloReply(session_id = 'todo'))
     runner = AsyncTaskRunner()
     ws_read_task = runner.run(ms.receive)
+    probe_task = runner.run(user.get_closest_orchestrator())
     async for task in runner.wait_next():
         if task == ws_read_task:
             exc = task.exception()
@@ -81,6 +84,9 @@ async def websocket_handler(request):
                 break
             msg = task.result()
             log.debug('%s: msg received - %s', request.remote, msg)
+        elif task == probe_task:
+            result = probe_task.result()
+            log.debug('%s', result)
     runner.clear()
     log.debug('%s: WS closed', request.remote)
     return ws

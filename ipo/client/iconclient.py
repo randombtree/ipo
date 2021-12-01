@@ -8,9 +8,14 @@ from typing import Optional
 
 from ..util.signal import Signal, Emitter
 from ..api import message
-from ..daemon.messagetask import MessageTaskDispatcher
+from ..daemon.messagetask import MessageTaskDispatcher, MessageTaskHandler
+from . import user
 
 log = logging.getLogger(__name__)
+
+
+class NotConnectedException(Exception):
+    ...
 
 
 class ClientState(Enum):
@@ -56,6 +61,12 @@ class IconClient(Emitter):
         self.state = ClientState.CONNECTING
         self._task = asyncio.create_task(self._run())
 
+    async def new_user(self, ip: str) -> user.User:
+        """ Add new ICON user """
+        if not self.state == ClientState.CONNECTED:
+            raise NotConnectedException('Orchestrator cannot be reached')
+        return user.User(self, ip)
+
     async def disconnect(self):
         """ Disconnect from orchestrator """
         if self.state in (ClientState.CONNECTING, ClientState.CONNECTED):
@@ -67,6 +78,7 @@ class IconClient(Emitter):
         # the communication woes
         async with MessageTaskDispatcher(reader, writer, {}, None) as dispatcher:
             await dispatcher.write(message.ClientHello(version = '0.0.1'))
+            command_task = dispatcher.run_task(self.inqueue.get)
             async for unhandled, _out in dispatcher:
                 if not self.state == ClientState.CONNECTED:
                     if isinstance(unhandled, message.HelloReply):
@@ -76,12 +88,26 @@ class IconClient(Emitter):
                         self.state = ClientState.CONNECTED
                         await self.Connected()
                         continue
-                log.error('Unhandled %s', unhandled)
+                    else:
+                        log.warning('Messages received while waiting for handshake? Disconnect!')
+                        break
+                if unhandled == command_task:
+                    command = command_task.result()
+                    # Currently only new sessions, so we go with this simple tuple
+                    msg, handler = command
+                    await dispatcher.write(msg)
+                    dispatcher.add_session(msg.msg_id, handler)
+                else:
+                    log.error('Unhandled %s', unhandled)
 
         if self.state == ClientState.CONNECTED:
             log.debug('Disconnected..')
             self.state = ClientState.DISCONNECTED
             await self.Disconnected()
+
+    async def start_session(self, initial_msg: message.IconMessage, handler: MessageTaskHandler):
+        """ Start a new session to communicate with the orchestrator """
+        await self.inqueue.put((initial_msg, handler))
 
     async def _run(self):
         while not self.state == ClientState.SHUTDOWN:
