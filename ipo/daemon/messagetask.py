@@ -2,6 +2,7 @@
 A Common message task handler meant to handle new incoming messages and help with
 multiplexing connection id's.
 """
+import sys
 import asyncio
 from asyncio import Queue, Task
 from asyncio.streams import StreamReader, StreamWriter
@@ -19,6 +20,7 @@ from typing import (
     AsyncGenerator,
     Mapping,
 )
+from types import ModuleType
 
 from . events import (
     ShutdownEvent,
@@ -90,6 +92,36 @@ class MessageTaskHandler(metaclass = ABCMeta):
 MessageHandlerMapping = Mapping[Type[message.IconMessage], Type[MessageTaskHandler]]
 # Can be used in annotating mappings Message -> Handler
 MessageToHandler = dict[Type[message.IconMessage], Type[MessageTaskHandler]]
+
+
+class MessageHandler:
+    """
+    Annotation for message handlers to auomatically register the handler to the module set of
+    handlers.
+    """
+    MODULE_VAR = 'MESSAGE_HANDLERS'
+    message_type: Type[message.IconMessage]
+
+    def __init__(self, message_type: Type[message.IconMessage]):
+        self.message_type = message_type
+
+    def __call__(self, cls: Type[MessageTaskHandler]):
+        module = sys.modules[cls.__module__]
+        mapping: MessageToHandler
+        if not hasattr(module, self.MODULE_VAR):
+            mapping = {}
+            setattr(module, self.MODULE_VAR, mapping)
+        else:
+            mapping = getattr(module, self.MODULE_VAR)
+        mapping[self.message_type] = cls
+        return cls
+
+
+def get_message_handlers(module: ModuleType) -> MessageHandlerMapping:
+    """ Return registered message handlers for module """
+    if not hasattr(module, MessageHandler.MODULE_VAR):
+        raise NameError('Module has no registered message handlers')
+    return getattr(module, MessageHandler.MODULE_VAR)
 
 
 class MessageFlusher:
