@@ -30,7 +30,7 @@ from . state import Icond
 from ..api import message
 from ..api.message import IconMessage, JSONWriter, MessageReader
 
-from ..util.asynctask import AsyncTask, AsyncTaskRunner, waitany
+from ..util.asynctask import AsyncTask, AsyncTaskRunner, waitany, RunnableTask
 
 log = logging.getLogger(__name__)
 
@@ -217,6 +217,14 @@ class MessageTaskDispatcher:
     def add_handlers(self, handlers: MessageHandlerMapping):
         """ Add new message handlers """
         self.handlers.update(handlers)
+
+    def run_task(self, task: RunnableTask, *params, restartable: bool = True) -> AsyncTask:
+        """ Run a task """
+        return self.runner.run(task, *params, restartable = restartable)
+
+    def add_session(self, sessid: str, handler: MessageTaskHandler):
+        """ Add a new session handler """
+        self.msg_handlers[sessid] = handler
 
     async def _process_messages(self) -> AsyncGenerator[tuple[Union[AsyncTask, IconMessage], Queue], None]:
         """
