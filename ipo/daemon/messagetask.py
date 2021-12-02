@@ -80,6 +80,23 @@ class MessageTaskHandler(metaclass = ABCMeta):
     def __await__(self):
         return self.events.get().__await__()
 
+    def _mark_message_handled(self):
+        """
+        Update queue consumer stats.
+        """
+        self.events.task_done()
+
+    async def __aenter__(self):
+        """
+        Context manager for message handling. Returns the message and
+        upon exiting will mark it as handeled.
+        """
+        return await self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self._mark_message_handled()
+        return False
+
     @abstractmethod
     async def handler(self, initial_msg: message.IconMessage):
         # pylint: disable=unused-argument
