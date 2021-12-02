@@ -3,6 +3,7 @@
 
 from ..api.message import IconMessage
 
+
 class ShutdownEvent:
     """ Event signalling a shutdown """
     ...
@@ -21,14 +22,17 @@ class MessageEvent:
         return self.msg
 
 
-class ContainerRunningEvent:
+class ContainerEventBase:
+    """ Base event class for container events """
+    def __init__(self, container):
+        self.container = container
+
+
+class ContainerRunningEvent(ContainerEventBase):
     """ Event when container is ready to run """
-
-    def __init__(self, container):
-        self.container = container
+    ...
 
 
-class ContainerFailedEvent:
+class ContainerFailedEvent(ContainerEventBase):
     """ Event when a container fails """
-    def __init__(self, container):
-        self.container = container
+    ...
