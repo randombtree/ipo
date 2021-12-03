@@ -55,6 +55,9 @@ class Router:
 
     def __init__(self, /, ip: bytes, rtt: int, hops: int, ts: float):
         assert len(ip) == 4
+        assert isinstance(rtt, int)
+        assert isinstance(hops, int)
+        assert isinstance(ts, float)
         self.ip = ip
         self.min_rtt = rtt
         self.hops = hops
@@ -74,6 +77,7 @@ class Router:
 
         Returns True if this change should be announced to the DHT.
         """
+        assert isinstance(rtt, int)
         # Ignore larger rtts for now
         if rtt < self.min_rtt:
             self.ts = ts
@@ -179,6 +183,8 @@ class RouteManager:
         # In no case should we be making metrics without knowing
         # our IP
         assert ip is not None
+        assert isinstance(router.min_rtt, int)
+        assert isinstance(router.hops, int)
         return DistanceMetric(rtt = router.min_rtt,
                               hops = router.hops,
                               ip = ip,
@@ -209,7 +215,7 @@ class RouteManager:
                 continue
             if hop.ip in self.routers:
                 router = self.routers[hop.ip]
-                announce = router.update(hop.rtt, now)
+                announce = router.update(int(hop.rtt * 1000), now)
             else:
                 # New router
                 router = Router(ip = hop.ip, rtt = int(hop.rtt * 1000), hops = ndx + 1, ts = now)
@@ -290,12 +296,15 @@ class RouteManager:
 
     async def _refresh_routes(self):
         """ Walk thorugh all edge routers and check if they need refreshing """
-        log.debug('Refreshing routes')
-        # TODO: How to avoid this copy without breaking concurrency
-        for router in self.edge_routers.copy():
-            await self._probe_route(router.ip)
-            if router.is_stale(time.monotonic()):
-                self.edge_routers.discard(router)
+        while True:
+            await asyncio.sleep(ROUTER_REFRESH_INTERVAL)
+            log.debug('Refreshing routes')
+            # TODO: How to avoid this copy without breaking concurrency
+            for router in self.edge_routers.copy():
+                await self._probe_route(router.ip)
+                if router.is_stale(time.monotonic()):
+                    self.edge_routers.discard(router)
+            log.debug('Refresh done')
 
     async def add_route(self, ip: Union[str, bytes]):
         """ Add a route destination - this will be probed later """
@@ -393,7 +402,7 @@ class RouteManager:
     async def _run(self):
         log.debug('Starting manager')
         runner = AsyncTaskRunner()
-        refresh_task = runner.run(asyncio.sleep, ROUTER_REFRESH_INTERVAL)
+        refresh_task = runner.run(self._refresh_routes())
         command_task = runner.run(self.cmd_queue.get)
 
         new_dht_nodes = Queue()
@@ -420,5 +429,9 @@ class RouteManager:
                 ip = event['ip']
                 log.debug('Probing new node %s from DHT connection', ip)
                 await self._probe_route(ip)
+            elif task == refresh_task:
+                log.error('Refresh task had an exception')
+                e = refresh_task.exception()
+                log.critical(e, exc_info = True)
         runner.clear()
         log.debug('Stopping manager')
