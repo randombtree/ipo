@@ -66,10 +66,7 @@ class ContainerManager:
         self.task_runner.start_task(command_task)
         log.debug('ContainerManager started')
         async for task in self.task_runner.wait_next():
-            e = task.exception()
-            if e is not None:
-                log.error('Task %s had an exception %s', task, e)
-            elif task == command_task:
+            if task == command_task:
                 result = task.result()
                 self.inqueue.task_done()
                 if isinstance(result, ShutdownEvent):
@@ -78,7 +75,17 @@ class ContainerManager:
             elif task in self.task_container:
                 # A container died
                 container = self.task_container[task]
-                log.debug('Container %s died', container.name)
+                try:
+                    # Check if there was an exception; this is the cleanest way
+                    # to get a "proper" stack trace logged with logger :(
+                    r = task.result()
+                    log.debug('Container %s stopped', container)
+                except Exception:
+                    log.critical('Exception in container handler', exc_info = True)
+                    # Better remove it alltogether as it's state is probably totally
+                    # unpredictable
+                    del self.containers[container.image]
+
                 del self.task_container[task]
             if self.icond.shutdown:
                 break
@@ -107,11 +114,10 @@ class ContainerManager:
                 return container
         else:
             # TODO: Allow multiple ICONs from same image
-            container = Container(image, image, self.icond, **params)
+            container = Container(image, self.icond, **params)
 
-        task = AsyncTask(lambda: container.start(), restartable = False)
+        task = self.task_runner.run(container.run())
         self.task_container[task] = container
-        self.task_runner.start_task(task)
         self.containers[image] = container
         return container
 

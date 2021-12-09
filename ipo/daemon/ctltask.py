@@ -3,8 +3,6 @@ from asyncio import Queue
 import socket
 import logging
 
-import docker  # type: ignore
-
 from . events import (
     ContainerRunningEvent,
     ContainerFailedEvent
@@ -39,24 +37,25 @@ class ContainerRunTask(MessageTaskHandler):
             params['ports'] = msg.publish
 
         log.debug('Run container %s, params %s', msg.image, params)
-        try:
-            docker_image = await self.icond.docker.images.get(image)
-            log.debug(docker_image)
-            reply_msg = msg.create_reply(msg = 'Working..')
-            wakeup = Queue()  # type: Queue
-            self.icond.eventqueue.listen([
-                ContainerRunningEvent,
-                ContainerFailedEvent,
-            ], wakeup)
-            container = await self.icond.cmgr.run_container(image, **params)
-            while container.state != ContainerState.RUNNING:
-                ev = await wakeup.get()
-                wakeup.task_done()
-                if isinstance(ev, ContainerRunningEvent) and ev.container == container:
-                    log.debug('Container %s successfully started', image)
-                    break
-        except docker.errors.ImageNotFound:
-            reply_msg = message.Error(msg_id = msg.msg_id, msg = 'Image not found')
+
+        reply_msg = msg.create_reply(msg = 'Working..')
+        wakeup = Queue()  # type: Queue
+        self.icond.eventqueue.listen([
+            ContainerRunningEvent,
+            ContainerFailedEvent,
+        ], wakeup)
+        container = await self.icond.cmgr.run_container(image, **params)
+        while container.state != ContainerState.RUNNING:
+            ev = await wakeup.get()
+            wakeup.task_done()
+            if isinstance(ev, ContainerRunningEvent) and ev.container == container:
+                log.debug('Container %s successfully started', image)
+                break
+            if isinstance(ev, ContainerFailedEvent) and ev.container == container:
+                log.warning('Failed to start container')
+                # TODO: Perhaps more data from event
+                reply_msg = message.Error(msg_id = msg.msg_id, msg = 'Failed to start container')
+                break
 
         await self.outqueue.put(reply_msg)
         await self.outqueue.join()   # Wait until message is sent
@@ -68,8 +67,8 @@ class ContainerLsTask(MessageTaskHandler):
     async def handler(self, initial_msg: message.IconMessage):
         log.debug('Container ls')
         containers = self.icond.cmgr.list()
-        props = { c.name: dict(state =  c.state.name, container =  c.container_name)
-                  for c in containers }
+        props = {c.image: dict(state =  c.state.name, container =  c.container_name)
+                 for c in containers}
         reply = initial_msg.create_reply(containers = props)
         await self.outqueue.put(reply)
         await self.outqueue.join()
