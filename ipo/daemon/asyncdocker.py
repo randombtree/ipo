@@ -61,6 +61,11 @@ class AsyncDockerWrapper:
             return list(map(self.maybe_wrap, obj))
         return obj
 
+    def __eq__(self, other):
+        if isinstance(other, AsyncDockerWrapper):
+            return self.original.__eq__(other.original)
+        return self.original.__eq__(other)
+
     def __str__(self):
         objdetails = '<AsyncWrapper: %x>' % (id(self),)
         wrappee = self.original.__str__()
