@@ -58,7 +58,7 @@ class AsyncDockerWrapper:
             return wrapper
         if isinstance(obj, list):
             # Some, e.g. containers.list return a list of containers, make sure the content is wrapped
-            return map(self.maybe_wrap, obj)
+            return list(map(self.maybe_wrap, obj))
         return obj
 
     def __str__(self):
