@@ -9,6 +9,7 @@ import re
 import logging
 
 from .container import Container
+from .deployment import DeploymentInfo
 from .. state import Icond
 from ... util.asynctask import AsyncTask, AsyncTaskRunner
 from .. events import (
@@ -102,7 +103,7 @@ class ContainerManager:
             await asyncio.wait(waitfor)
         log.info('Containers shut-down..')
 
-    async def run_container(self, image, **params) -> Container:
+    async def run_container(self, image, deployment: DeploymentInfo) -> Container:
         """
         Run (start) the container.
         image: The image to use
@@ -114,7 +115,7 @@ class ContainerManager:
                 return container
         else:
             # TODO: Allow multiple ICONs from same image
-            container = Container(image, self.icond, **params)
+            container = Container(image, self.icond, deployment)
 
         task = self.task_runner.run(container.run())
         self.task_container[task] = container

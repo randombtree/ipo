@@ -11,6 +11,7 @@ from . events import (
 from . messagetask import MessageTaskHandler, MessageToHandler
 from ..api import message
 from . container import ContainerState
+from .container.deployment import DeploymentInfo
 
 
 log = logging.getLogger(__name__)
@@ -29,14 +30,12 @@ class ContainerRunTask(MessageTaskHandler):
         msg = initial_msg
         image = msg.image
 
-        # Convert here between cmdline api and docker api
-        params: dict[str, str] = {}
-        if 'env' in msg:
-            params['environment'] = msg.env
-        if 'publish' in msg:
-            params['ports'] = msg.publish
+        # Set deployment info; from here we only deploy root containers
+        deployment = DeploymentInfo(ports = msg.publish if 'env' in msg else {},
+                                    environment = msg.env if 'publish' in msg else {},
+                                    root = True)
 
-        log.debug('Run container %s, params %s', msg.image, params)
+        log.debug('Run container %s, info: %s', msg.image, deployment)
 
         reply_msg = msg.create_reply(msg = 'Working..')
         wakeup = Queue()  # type: Queue
@@ -44,7 +43,7 @@ class ContainerRunTask(MessageTaskHandler):
             ContainerRunningEvent,
             ContainerFailedEvent,
         ], wakeup)
-        container = await self.icond.cmgr.run_container(image, **params)
+        container = await self.icond.cmgr.run_container(image, deployment)
         while container.state != ContainerState.RUNNING:
             ev = await wakeup.get()
             wakeup.task_done()

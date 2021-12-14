@@ -17,6 +17,9 @@ import docker  # type: ignore
 from docker.models.images import (  # type: ignore
     Image as DockerImage
 )
+from docker.models.containers import (  # type: ignore
+    Container as DockerContainer
+)
 
 from .. state import Icond
 from ... util.asynctask import AsyncTaskRunner
@@ -28,6 +31,7 @@ from .. events import (
 from ...api import message
 from ..messagetask import MessageTaskDispatcher, get_message_handlers
 from . import containertask
+from . deployment import DeploymentInfo
 
 
 log = logging.getLogger(__name__)
@@ -81,14 +85,14 @@ class Container:
     """ A running container we are providing ICON services to """
     image: str
     icond: Icond
-    params: dict[str, str]
+    deployment: DeploymentInfo
     state: ContainerState
     inqueue: asyncio.Queue
     container_name: Optional[str]
     control_path: Optional[str]  # Path to mount into container
     clients: int                 # Connected clients count
 
-    def __init__(self, image: str, icond: Icond, **params):
+    def __init__(self, image: str, icond: Icond, deployment: DeploymentInfo):
         """
         name: Container name
         params: Container parameters for docker
@@ -96,7 +100,7 @@ class Container:
         """
         self.image = image
         self.icond = icond
-        self.params = params
+        self.deployment = deployment
         self.state = ContainerState.STOPPED
         self.inqueue = asyncio.Queue()
         self.container_name = None  # Figured out when starting
@@ -192,6 +196,48 @@ class Container:
         # FIXME?: /else clean up all files there perhaps?
         self.control_path = control_path
 
+    def _valid_container(self, container: DockerContainer, image: DockerImage) -> bool:
+        """
+        Check if the docker container matches our parameters.
+        - Ports and environment variables can change between deployments
+          even if the image stays the same.
+        """
+        # Check that images match
+        if container.image != image:
+            return False
+        # Check that container matches
+        # It's possible that the origin host changes some mappings
+        # so best be overly cautious
+        ports = container.attrs['NetworkSettings']['Ports']
+        for port, hostport in self.deployment.ports.items():
+            # Port is in docker format, e.g. '8080/tcp'
+            if port in ports:
+                # Does the container use dynamic ports?
+                # In that case, any existing mapping can be re-used
+                # (we assume it's "sane")
+                if hostport is None:
+                    continue
+                # docker port config looks something like this:
+                # {'8080/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '8080'}, ..]
+                for hostmap in ports[port]:
+                    # We assume any matching port is ok
+                    # and IPv4 mapping matches IPv6
+                    if int(hostmap['HostPort']) == hostport:
+                        break
+                    log.debug('%s: HostPort mapping differs on container %s', self.image, container.name)
+                    return False
+        # Check environment also
+        # Weird that dockers env isn't in a dictionary.. make it so
+        docker_env: list[str] = container.attrs['Config']['Env']
+        env: dict[str, str] = dict(map(lambda v: tuple(v.split('=')[:2]),  # type: ignore
+                                       filter(lambda v: '=' in v[1:], docker_env)))  # /paranoid
+        for envvar, val in self.deployment.environment.items():
+            if envvar not in env or env[envvar] != val:
+                log.debug('Environment %s mismatches, %s != %s',
+                          envvar, val, env[envvar])
+                return False
+        return True
+
     async def _start_container(self, image: DockerImage):
         """ Start container """
         # Is it an existing container?
@@ -202,16 +248,9 @@ class Container:
                 self.container_name = container_name
                 container = await d.containers.get(container_name)
                 log.debug('Possible container %s for %s found', container_name, self.image)
-                # Check that images match
-                # TODO: Support updating long lived container with newer image
-                if container.image == image:
+                if self._valid_container(container, image):
                     break
 
-            # Fixme: Hmph, the current ICON api is a bit hacky, ideally we would
-            #        mirror docker api, e.g. first create container then specify
-            #        to run it
-            if self.params:
-                log.warning('Re-using container, parameters ignored')
             self._init_control_path()
         except docker.errors.NotFound:
             log.debug('Container for %s not found, starting new', self.image)
@@ -227,7 +266,8 @@ class Container:
             container = await d.containers.create(self.image,
                                                   name = self.container_name,
                                                   volumes = volumes,
-                                                  **self.params)
+                                                  environment = self.deployment.environment,
+                                                  ports = self.deployment.ports)
         log.debug(container)
         try:
             await container.start()
