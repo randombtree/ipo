@@ -4,3 +4,4 @@
 
 docker
 kademlia>=2.2.2
+setproctitle

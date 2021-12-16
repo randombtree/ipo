@@ -9,6 +9,7 @@ import argparse
 import logging
 
 import docker  # type: ignore
+from setproctitle import setproctitle
 
 from . events import ShutdownEvent
 from . state import Icond
@@ -78,6 +79,7 @@ def start(params : argparse.Namespace):
         print("Starting of the ICON daemon might fail when not run as root...")
         print("Try --force if you are confident it will work")
         sys.exit(-1)
+    setproctitle('ipo_server')
     log_handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     log_handler.setFormatter(formatter)
