@@ -12,45 +12,12 @@ import docker  # type: ignore
 
 from . events import ShutdownEvent
 from . state import Icond
-from . messagetask import MessageTaskDispatcher
-from . ctltask import CTL_HANDLERS
 from ..util.asynctask import waitany
 from . signals import set_signal_handlers
+from . control import ControlServer
 
 
 log = logging.getLogger(__name__)
-
-
-async def iconctl_connection_handler(reader, writer, icond: Icond):
-    """ Icon control channel handler """
-    async with MessageTaskDispatcher(reader, writer, CTL_HANDLERS, icond) as dispatcher:
-        async for unhandled in dispatcher:
-            log.error('Unhandled %s', unhandled)
-
-
-def iconctl_connection_factory(icond: Icond):
-    """ Create a connection handler with icond included in the closure """
-
-    async def connection_handler(reader, writer):
-        return await iconctl_connection_handler(reader, writer, icond)
-    return connection_handler
-
-
-async def iconctl_server(icond: Icond):
-    """ ICON control channel server """
-    control_socket = icond.config.control_socket
-    try:
-        os.unlink(control_socket)
-    except OSError:
-        if os.path.exists(control_socket):
-            raise
-
-    server = await asyncio.start_unix_server(
-        iconctl_connection_factory(icond),
-        path = control_socket
-    )
-    async with server:
-        await server.serve_forever()
 
 
 class InitializationException(Exception):
@@ -102,7 +69,8 @@ async def main():
     await init_repository(icond)
     log.info('Starting server')
 
-    ctl_server_task = asyncio.create_task(iconctl_server(icond),
+    ctl_server = ControlServer(icond)
+    ctl_server_task = asyncio.create_task(ctl_server.run(),
                                           name = "ctl_server")
     cmgr_task = icond.cmgr.start()
 
