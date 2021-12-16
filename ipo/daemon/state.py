@@ -1,12 +1,18 @@
 """
 ICOND global state
 """
+import asyncio
+import logging
+
+from .. util.asynctask import AsyncTaskRunner
 from . asyncdocker import AsyncDockerClient
 
 from . events import ShutdownEvent
 from . eventqueue import EventQueue, Subscription
 from . config import DaemonConfig
 from . routing import RouteManager
+
+log = logging.getLogger(__name__)
 
 
 class Icond:
@@ -20,6 +26,7 @@ class Icond:
     def __init__(self):
         # Work around circular deps
         from . import container  # pylint: disable=import-outside-toplevel
+        from . import control    # pylint: disable=import-outside-toplevel
 
         self.docker = AsyncDockerClient(base_url='unix://var/run/docker.sock')
         self.shutdown = False
@@ -27,18 +34,35 @@ class Icond:
         self.config = DaemonConfig()
         self.cmgr = container.ContainerManager(self)
         self.router = RouteManager(self.config)
+        self.ctrl = control.ControlServer(self)
 
-    async def start(self):
-        """
-        Start.
-        """
+    async def _shutdown_waiter(self):
+        with self.subscribe_event(ShutdownEvent) as shutdown_event:
+            await shutdown_event.get()
+
+    async def run(self):
+        """ Run the sub-modules of the daemon """
+        runner = AsyncTaskRunner()
         await self.router.start()
+        runner.run(self.ctrl.run())
+        shutdown_task = runner.run(self._shutdown_waiter())
+        cmgr_task = runner.run(lambda: self.cmgr.start())
 
-    async def stop(self):
-        """
-        Stop.
-        """
-        await self.router.stop()
+        try:
+            async for task in runner:
+                _r = task.result()
+                if shutdown_task == task:
+                    log.info('Shutdown signaled. Quitting..')
+                    break
+                log.error('Unexpected exit of task %s. Quitting!', task)
+                self.do_shutdown()
+        finally:
+            runner.clear()
+            await self.router.stop()
+            log.info('Waiting for tasks to shut down...')
+            await asyncio.wait({cmgr_task.asynctask, self.router.task})
+            # Also, leaving docker session open will spew warnings
+            await self.docker.close()
 
     def do_shutdown(self):
         """ Shutdown daemon commanded """

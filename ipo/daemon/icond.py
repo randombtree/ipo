@@ -68,45 +68,8 @@ async def main():
 
     await init_repository(icond)
     log.info('Starting server')
-
-    ctl_server = ControlServer(icond)
-    ctl_server_task = asyncio.create_task(ctl_server.run(),
-                                          name = "ctl_server")
-    cmgr_task = icond.cmgr.start()
-
     set_signal_handlers(icond)
-    await icond.start()
-    with icond.subscribe_event(ShutdownEvent) as shutdown_event:
-        log.info('Server started')
-        shutdown_task = asyncio.create_task(shutdown_event.get())
-        (done, _pending) = await waitany({
-            shutdown_task,
-            ctl_server_task,
-            cmgr_task,
-        })
-        for task in done:
-            e = task.exception()
-            if e:
-                log.error('There was an exception in the daemon: %s', e, exc_info = True)
-                task.print_stack()
-        # Any task finishing indicates that we want to exit, either due to some internal
-        # error or a shutdown event
-        if shutdown_task in done:
-            log.info('Shutdown signaled')
-
-        # Graceful shutdown for cmgr
-        if cmgr_task not in done:
-            log.info('Waiting for tasks to shut down..')
-            # FIXME: This could take a lot of time, some way to ensure that progress is made
-            #        should probalby be added instead of using timeouts
-            await asyncio.wait({cmgr_task}, timeout = 60)
-
-    # Shut down control socket, to avoid spewing a lot of resource warnings when debugging
-    ctl_server_task.cancel()
-    await asyncio.wait({ctl_server_task, cmgr_task}, timeout = 60)
-    await icond.stop()
-    # Also, leaving docker session open will spew warnings
-    await icond.docker.close()
+    await icond.run()
 
 
 def start(params : argparse.Namespace):
