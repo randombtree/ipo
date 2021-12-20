@@ -2,6 +2,7 @@
 ICOND global state
 """
 import asyncio
+import socket
 import logging
 
 from .. util.asynctask import AsyncTaskRunner
@@ -27,6 +28,7 @@ class Icond:
         # Work around circular deps
         from . import container  # pylint: disable=import-outside-toplevel
         from . import control    # pylint: disable=import-outside-toplevel
+        from . import orchestrator  # pylint: disable=import-outside-toplevel
 
         self.docker = AsyncDockerClient(base_url='unix://var/run/docker.sock')
         self.shutdown = False
@@ -35,6 +37,7 @@ class Icond:
         self.cmgr = container.ContainerManager(self)
         self.router = RouteManager(self.config)
         self.ctrl = control.ControlServer(self)
+        self.orchestrator = orchestrator.OrchestratorManager(self)
 
     async def _shutdown_waiter(self):
         with self.subscribe_event(ShutdownEvent) as shutdown_event:
@@ -47,6 +50,7 @@ class Icond:
         runner.run(self.ctrl.run())
         shutdown_task = runner.run(self._shutdown_waiter())
         cmgr_task = runner.run(lambda: self.cmgr.start())
+        orch_task = runner.run(self.orchestrator.run())
 
         try:
             async for task in runner:
@@ -60,7 +64,10 @@ class Icond:
             runner.clear()
             await self.router.stop()
             log.info('Waiting for tasks to shut down...')
-            await asyncio.wait({cmgr_task.asynctask, self.router.task})
+            await asyncio.wait({cmgr_task.asynctask,
+                                self.router.task,
+                                orch_task.asynctask,
+                                })
             # Also, leaving docker session open will spew warnings
             await self.docker.close()
 
@@ -76,3 +83,14 @@ class Icond:
     def publish_event(self, event):
         """ Send a global event to all subscribers for the event type """
         self.eventqueue.publish(event)
+
+    def get_ip_address(self) -> str:
+        """ Returns the IP address of this orchestrator """
+        # TODO: A bit hacky atm; Should only be called after the router
+        #       has determined our IP address - and currently it relies on
+        #       DHT replies.
+        addr = self.router.get_current_ip()
+        if addr is not None:
+            return socket.inet_ntoa(addr)
+        log.error('IP address not available')
+        return '0.0.0.0'

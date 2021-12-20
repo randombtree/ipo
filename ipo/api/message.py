@@ -211,6 +211,18 @@ class HelloReply(IconMessage):
     ...
 
 
+class OrchestratorHelloReply(Reply):
+    """ Reply message to Hello """
+    FIELD_VALIDATORS = dict(version = None, ip = str, port = int)
+    ...
+
+
+class OrchestratorHello(IconMessage):
+    """ Hello to orchestrator """
+    FIELD_VALIDATORS = dict(version = None, ip = str, port = int)
+    REPLY_CLS = OrchestratorHelloReply
+
+
 class ClientHello(IconMessage):
     """ ICON container initialization message """
     FIELD_VALIDATORS = dict(version = None)
