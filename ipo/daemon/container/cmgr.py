@@ -95,10 +95,11 @@ class ContainerManager:
         #       some more code to bring back the state of already running when re-starting
         log.info('Shutting down containers...')
         waitfor = list()
-        for container in self.containers.values():
-            if container.task and not container.task.done():
-                waitfor.append(container.task)
-            await container.stop()
+        for task, container in self.task_container.items():
+            if container.is_running():
+                await container.stop()
+                waitfor.append(task.asynctask)
+
         if len(waitfor) > 0:
             await asyncio.wait(waitfor)
         log.info('Containers shut-down..')
