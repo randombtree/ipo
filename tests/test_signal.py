@@ -1,6 +1,6 @@
 import unittest
 from unittest import IsolatedAsyncioTestCase
-from asyncio import Queue, QueueEmpty
+from asyncio import Queue, QueueEmpty, wait_for
 
 from ipo.util.signal import Signal, Emitter
 
@@ -45,7 +45,6 @@ class TestSignal(IsolatedAsyncioTestCase):
 
     async def test_events(self):
         msg = 'foo'
-        obj = object()
         await self.emitter.emit1(msg)
         event = self.queue1.get_nowait()
         self.assertTrue(event.is_signal(MyEmitter.Signal1), msg = 'Event should be from Signal1')
@@ -60,6 +59,15 @@ class TestSignal(IsolatedAsyncioTestCase):
 
         with self.assertRaises(QueueEmpty):
             event = self.queue2.get_nowait()
+
+    async def test_asyncwith(self):
+        """ Test async with Signal """
+        msg = 'foo'
+        async with self.emitter.Signal1 as signal:
+            await self.emitter.emit1(msg)
+            event = await wait_for(signal, 2)
+            self.assertIn('msg', event)
+            self.assertEqual(event['msg'], msg)
 
     async def test_synchronous(self):
         """ Test synchronous signal """

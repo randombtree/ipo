@@ -33,11 +33,31 @@ class Event:
         return name in self.kwargs
 
 
+class SignalWaiter:
+    """
+    Simple queue wrapper for receiving events, reducing some bolerplate code.
+    """
+    queue: Queue
+
+    def __init__(self, queue: Queue):
+        self.queue = queue
+
+    def __await__(self):
+        async def wait_and_done():
+            event = await self.queue.get()
+            self.queue.task_done()
+            return event
+        return wait_and_done().__await__()
+
+
 class Signal:
     """
     Signal controller.
     Calling the signal controller will emit an event. Signals should be set as
     class variables in a class that is a sub-class of Emitter.
+
+    Waiting for signals can be done using the connect method, or using the async context handler,
+    e.g. 'async with obj.Signal as signal' and awaiting the returned signal object.
     """
     slots: WeakSet[Queue]
     parent: Union['Signal', None]
@@ -97,6 +117,16 @@ class Signal:
     def connect(self, queue: Queue):
         """ Add a receiver of events """
         self.slots.add(queue)
+
+    async def __aenter__(self):
+        """ async context enter """
+        queue = Queue()
+        self.slots.add(queue)
+        return SignalWaiter(queue)
+
+    async def __aexit__(self, exc_type, exc, tb):
+        # Since using weak sets, the queue will soon disappear
+        return False
 
 
 class Emitter:
