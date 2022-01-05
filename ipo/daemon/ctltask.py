@@ -1,17 +1,12 @@
 """ ICONctl task handlers """
-from asyncio import Queue
+import asyncio
 import socket
 import logging
-
-from . events import (
-    ContainerRunningEvent,
-    ContainerFailedEvent
-)
 
 from . messagetask import MessageTaskHandler, MessageToHandler
 from ..api import message
 from . container import ContainerState
-from .container.deployment import DeploymentInfo
+from . container.image import ImageException
 
 
 log = logging.getLogger(__name__)
@@ -28,35 +23,35 @@ class ContainerRunTask(MessageTaskHandler):
     """ Run (start) container from image """
     async def handler(self, initial_msg: message.IconMessage):
         msg = initial_msg
-        image = msg.image
 
-        # Set deployment info; from here we only deploy root containers
-        deployment = DeploymentInfo(ports = msg.publish if 'env' in msg else {},
-                                    environment = msg.env if 'publish' in msg else {},
-                                    root = True)
+        ports = msg.publish   if 'env' in msg else {}
+        environment = msg.env if 'publish' in msg else {}
 
-        log.debug('Run container %s, info: %s', msg.image, deployment)
+        log.debug('Run local ICON %s', msg.image)
+        try:
+            coordinator = await self.icond.cmgr.start_local_icon(msg.image,
+                                                                 ports,
+                                                                 environment)
+        except ImageException as e:
+            await self._send(message.Error.reply_to(msg, msg = f'Image failed: {e}'))
+            return
 
-        reply_msg = msg.create_reply(msg = 'Working..')
-        wakeup = Queue()  # type: Queue
-        self.icond.eventqueue.listen([
-            ContainerRunningEvent,
-            ContainerFailedEvent,
-        ], wakeup)
-        container = await self.icond.cmgr.run_container(image, deployment)
-        while container.state != ContainerState.RUNNING:
-            ev = await wakeup.get()
-            wakeup.task_done()
-            if isinstance(ev, ContainerRunningEvent) and ev.container == container:
-                log.debug('Container %s successfully started', image)
-                break
-            if isinstance(ev, ContainerFailedEvent) and ev.container == container:
-                log.warning('Failed to start container')
-                # TODO: Perhaps more data from event
-                reply_msg = message.Error(msg_id = msg.msg_id, msg = 'Failed to start container')
-                break
-
-        await self.outqueue.put(reply_msg)
+        container = coordinator.container
+        async with container.StateChanged as signal:
+            while container.state not in [ContainerState.RUNNING, ContainerState.FAILED]:
+                try:
+                    # FIXME: Wait for 60 seconds; handy when developing, but might need adjustments
+                    event = await asyncio.wait_for(signal, 60)
+                    new_state = event['state']
+                    log.debug('%s state changed to %s', container, new_state)
+                except asyncio.TimeoutError:
+                    reply_msg = message.Error.reply_to(msg,
+                                                       msg = 'Took too long to start (continue in background')
+                    break
+        reply_msg = \
+            msg.create_reply(msg = 'ICON started successfully') if container.state == ContainerState.RUNNING else \
+            message.Error.reply_to(msg, msg = 'Failed to start container')
+        await self._send(reply_msg)
         await self.outqueue.join()   # Wait until message is sent
         log.debug('ContainerRun finished')
 
@@ -66,7 +61,7 @@ class ContainerLsTask(MessageTaskHandler):
     async def handler(self, initial_msg: message.IconMessage):
         log.debug('Container ls')
         containers = self.icond.cmgr.list()
-        props = {c.image: dict(state =  c.state.name, container =  c.container_name)
+        props = {c.deployment.image.full_name: dict(state =  c.state.name, container =  c.container_name)
                  for c in containers}
         reply = initial_msg.create_reply(containers = props)
         await self.outqueue.put(reply)

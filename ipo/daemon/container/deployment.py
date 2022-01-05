@@ -2,6 +2,9 @@
 Deployment information.
 """
 from typing import Optional
+from abc import ABCMeta, abstractmethod
+
+from .image import Image
 
 
 def mapstr(d: dict) -> str:
@@ -13,14 +16,15 @@ class DeploymentInfo:
     """
     Deployment info for container.
     """
+    image: Image
+    global_name: Optional[str]        # Globally reachable repository name
     ports: dict[str, Optional[int]]   # Reflects docker network configuration
     environment: dict[str, str]       # Environment variables
-    root: bool                        # Is this the root container
 
-    def __init__(self, ports: dict[str, Optional[int]], environment: dict[str, str], root: bool):
+    def __init__(self, image: Image, ports: dict[str, Optional[int]], environment: dict[str, str]):
+        self.image = image
         self.ports = ports
         self.environment = environment
-        self.root = root
 
     def update_ports(self, portmap: list[tuple[str, Optional[int]]]):
         """
@@ -28,11 +32,16 @@ class DeploymentInfo:
         """
         self.ports.update(portmap)
 
-    def is_root(self) -> bool:
-        """ Is this container the 'ROOT'  container, which must not shut down """
-        return self.root
-
     def __str__(self) -> str:
         return 'ports: ' + mapstr(self.ports) + ', ' \
             +  'environment: ' + mapstr(self.environment) + ', ' \
             +  'root: {self.root}'
+
+
+class DeploymentCoordinator(metaclass = ABCMeta):
+    """ Container Deployment glue """
+
+    @abstractmethod
+    async def migrate_to(self, ip: str, port: int):
+        """ Start migration to new orchestrator """
+        ...

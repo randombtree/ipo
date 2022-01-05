@@ -8,8 +8,13 @@ from typing import Union
 import re
 import logging
 
+from . image import Image
 from .container import Container
 from .deployment import DeploymentInfo
+from . coordinator import (
+    ContainerCoordinator,
+    RootContainerCoordinator,
+)
 from .. state import Icond
 from ... util.asynctask import AsyncTask, AsyncTaskRunner
 from .. events import (
@@ -25,8 +30,8 @@ class ContainerManager:
     Manager of containers.
     """
     ICON_RE = re.compile(r'ICON_\w+')
-    containers: dict[str, Container]  # List of containers
-    task_container: dict[AsyncTask, Container]
+    deployments: dict[str, ContainerCoordinator]
+    tasks: dict[AsyncTask, ContainerCoordinator]
     icond: Icond
     task: Union[None, asyncio.Task]
     inqueue: asyncio.Queue     # Command queue
@@ -37,8 +42,8 @@ class ContainerManager:
         icond: Global state
         """
         self.icond = icond
-        self.containers = dict()
-        self.task_container = dict()
+        self.deployments = {}
+        self.tasks = {}
         self.inqueue = asyncio.Queue()
         self.task_runner = AsyncTaskRunner()
         self.task = None
@@ -73,56 +78,66 @@ class ContainerManager:
                 if isinstance(result, ShutdownEvent):
                     log.info('Shutdown event received')
                     break
-            elif task in self.task_container:
-                # A container died
-                container = self.task_container[task]
+            elif task in self.tasks:
+                # A coordinator quit
+                coordinator = self.tasks[task]
                 try:
                     # Check if there was an exception; this is the cleanest way
                     # to get a "proper" stack trace logged with logger :(
-                    r = task.result()
-                    log.debug('Container %s stopped', container)
+                    _r = task.result()
+                    log.debug('Coordinator %s stopped', coordinator)
                 except Exception:
-                    log.critical('Exception in container handler', exc_info = True)
+                    log.critical('Exception in coordinator', exc_info = True)
                     # Better remove it alltogether as it's state is probably totally
                     # unpredictable
-                    del self.containers[container.image]
+                    del self.deployments[coordinator.info.image.full_name]
 
-                del self.task_container[task]
+                del self.tasks[task]
             if self.icond.shutdown:
                 break
 
         # TODO: We currently shut down ICONs but this wouldn't strictly necessary - only
         #       some more code to bring back the state of already running when re-starting
         log.info('Shutting down containers...')
-        waitfor = list()
-        for task, container in self.task_container.items():
-            if container.is_running():
-                await container.stop()
+        waitfor: list[ContainerCoordinator] = []
+        for task, coordinator in self.tasks.items():
+            if coordinator.container.is_running():
+                await coordinator.stop()
                 waitfor.append(task.asynctask)
 
+        self.task_runner.clear()
+        # Just extra paranoia that all tasks really have quit when going forward
         if len(waitfor) > 0:
             await asyncio.wait(waitfor)
         log.info('Containers shut-down..')
 
-    async def run_container(self, image, deployment: DeploymentInfo) -> Container:
+    async def start_local_icon(self, image_name: str, ports: dict, environment: dict) -> ContainerCoordinator:
         """
-        Run (start) the container.
-        image: The image to use
+        Start a local ICON. The ICON will be the 'root' ICON and the coordination point of
+        other instances of this ICON.
+        returns: The coordinator for the ICON.
+        Throws: ImageException if image_name is invalid.
         """
-        # FIXME: Later on the image can contain a source repo
-        if image in self.containers:
-            container = self.containers[image]
-            if container.is_running():
-                return container
-        else:
-            # TODO: Allow multiple ICONs from same image
-            container = Container(image, self.icond, deployment)
+        image = await Image(image_name)
+        return await self.start_local_icon_image(image, ports, environment)
 
-        task = self.task_runner.run(container.run())
-        self.task_container[task] = container
-        self.containers[image] = container
-        return container
+    async def start_local_icon_image(self, image: Image, ports: dict, environment: dict) -> ContainerCoordinator:
+        """ Start local icon image """
+        # FIXME: Need async at all?
+        if image in self.deployments:
+            # TODO: Deal with re-starting of containers?
+            return self.deployments[image.full_name]
+
+        info = DeploymentInfo(image, ports, environment)
+        coordinator = RootContainerCoordinator(info)
+        self.deployments[image.full_name] = coordinator
+        task = self.task_runner.run(coordinator.run())
+        self.tasks[task] = coordinator
+        return coordinator
 
     def list(self) -> list[Container]:
         """ Return all the containers """
-        return list(self.containers.values())
+        # FIXME: Migrate to coordinator format?
+        return list(map(lambda d: d.container,
+                        filter(lambda d: d.container is not None,
+                               self.deployments.values())))

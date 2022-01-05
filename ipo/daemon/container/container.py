@@ -14,14 +14,13 @@ import itertools
 import logging
 
 import docker  # type: ignore
-from docker.models.images import (  # type: ignore
-    Image as DockerImage
-)
 from docker.models.containers import (  # type: ignore
     Container as DockerContainer
 )
 
-from .. state import Icond
+from .. import state
+from ...util.signal import Signal, Emitter
+
 from ... util.asynctask import AsyncTaskRunner
 from .. events import (
     ShutdownEvent,
@@ -31,7 +30,8 @@ from .. events import (
 from ...api import message
 from ..messagetask import MessageTaskDispatcher, get_message_handlers
 from . import containertask
-from . deployment import DeploymentInfo
+from . deployment import DeploymentInfo, DeploymentCoordinator
+from . image import Image
 
 
 log = logging.getLogger(__name__)
@@ -50,15 +50,16 @@ def container_base_name(image_name: str) -> str:
     return name_version.split(':')[0]
 
 
-def container_name_generator(image: DockerImage) -> Iterator[str]:
+def container_name_generator(image: Image) -> Iterator[str]:
     """ Generate new name possibilities for container """
-    base_name = container_base_name(image.attrs['RepoTags'][0])
-    container_name = f'ICON_{base_name}'
+    container_name = f'ICON_{image.image_name}'
 
     yield container_name
-    _m, sid = image.short_id.split(':')
+    # If the simple name isn't available, try appending the short id from image.
+    _m, sid = image.docker_image.short_id.split(':')
     container_name += f'-{sid}'
     yield container_name
+    # And if that fails, start numbering
     for ndx in itertools.count(start = 1):
         yield f'{container_name}:{ndx}'
 
@@ -81,38 +82,30 @@ async def is_local_image(image: str) -> bool:
     return False
 
 
-class Container:
+class Container(Emitter):
     """ A running container we are providing ICON services to """
-    image: str
-    icond: Icond
+    StateChanged = Signal()      # State change signal, called with state = 'new state'
+
     deployment: DeploymentInfo
+    coordinator: DeploymentCoordinator
     state: ContainerState
     inqueue: asyncio.Queue
     container_name: Optional[str]
     control_path: Optional[str]  # Path to mount into container
     clients: int                 # Connected clients count
 
-    def __init__(self, image: str, icond: Icond, deployment: DeploymentInfo):
+    def __init__(self, deployment: DeploymentInfo, coordinator: DeploymentCoordinator):
         """
-        name: Container name
-        params: Container parameters for docker
-        icond: Daemon global state
+        deployment: Info on deployment
         """
-        self.image = image
-        self.icond = icond
         self.deployment = deployment
+        self.coordinator = coordinator
         self.state = ContainerState.STOPPED
         self.inqueue = asyncio.Queue()
         self.container_name = None  # Figured out when starting
         self.control_path = None    # Ditto
-        self.icond.eventqueue.listen(ShutdownEvent, self.inqueue)
+        state.Icond.instance().eventqueue.listen(ShutdownEvent, self.inqueue)
         self.clients = 0
-
-    async def run(self):
-        """ Run container """
-        assert not self.is_running()
-        self.emit_state(ContainerState.STARTING)
-        await self._run()
 
     def is_running(self):
         """ Is the container in some kind of running state/starting up """
@@ -131,13 +124,17 @@ class Container:
             return ContainerFailedEvent(self)
         return None
 
-    def emit_state(self, new_state = None):
+    async def emit_state(self, new_state = None):
         """ Send an appropriate event based on the current state """
+        old_state = self.state
         if new_state is not None:
             self.state = new_state
+        if old_state == new_state:
+            return
+        await self.StateChanged(state = new_state)
         event = self._state_event()
         if event is not None:
-            self.icond.publish_event(event)
+            state.Icond.instance().publish_event(event)
 
     async def connection_server(self):
         """ Server for incoming connectio(s) from container """
@@ -154,23 +151,23 @@ class Container:
 
     async def handle_connection(self, reader, writer):
         """ Handle client connection """
-        log.debug('Client connected to %s', self.image)
+        log.debug('Client connected to %s', self.container_name)
         hello_received = False
-        async with MessageTaskDispatcher(reader, writer, {}, self.icond, container = self) as dispatcher:
+        async with MessageTaskDispatcher(reader, writer, {}, state.Icond.instance(), container = self) as dispatcher:
             async for unhandled, outqueue in dispatcher:
                 if not hello_received:
                     if isinstance(unhandled, message.ClientHello):
                         msg = unhandled
                         hello_received = True
-                        log.debug('%s: Client handshake completed', self.image)
+                        log.debug('%s: Client handshake completed', self.container_name)
                         await outqueue.put(msg.create_reply(version = '0.0.1'))
                         self.clients += 1
                         if self.clients == 1:
-                            self.emit_state(ContainerState.RUNNING)
+                            await self.emit_state(ContainerState.RUNNING)
                         # Allow other messages to be handled after handshake
                         dispatcher.add_handlers(get_message_handlers(containertask))
                     else:
-                        log.error('%s: Invalid handshake message %s', self.image, unhandled)
+                        log.error('%s: Invalid handshake message %s', self.container_name, unhandled)
                         break
                 elif isinstance(unhandled, message.IconMessage):
                     # There is no pretty way to go about this, just disconnect
@@ -184,26 +181,28 @@ class Container:
             self.clients -= 1
             if self.clients == 0:
                 log.debug('This was the last client exiting')
-                self.emit_state(ContainerState.CONWAITING)
+                await self.emit_state(ContainerState.CONWAITING)
 
         log.debug('Client disconnected')
 
     def _init_control_path(self):
         """ Initialize control path for new container """
-        control_path = f'{self.icond.config.run_directory}/{self.container_name}'
+        config = state.Icond.instance().config
+        control_path = f'{config.run_directory}/{self.container_name}'
         if not os.path.exists(control_path):
             os.mkdir(control_path, mode = 0o700)
         # FIXME?: /else clean up all files there perhaps?
         self.control_path = control_path
 
-    def _valid_container(self, container: DockerContainer, image: DockerImage) -> bool:
+    def _valid_container(self, container: DockerContainer) -> bool:
         """
         Check if the docker container matches our parameters.
         - Ports and environment variables can change between deployments
           even if the image stays the same.
         """
+        docker_image = self.deployment.image.docker_image
         # Check that images match
-        if container.image != image:
+        if container.image != docker_image:
             return False
         # Check that container matches
         # It's possible that the origin host changes some mappings
@@ -224,7 +223,9 @@ class Container:
                     # and IPv4 mapping matches IPv6
                     if int(hostmap['HostPort']) == hostport:
                         break
-                    log.debug('%s: HostPort mapping differs on container %s', self.image, container.name)
+                    log.debug('%s: HostPort mapping differs on container %s',
+                              self.deployment.image,
+                              container.name)
                     return False
         # Check environment also
         # Weird that dockers env isn't in a dictionary.. make it so
@@ -238,22 +239,24 @@ class Container:
                 return False
         return True
 
-    async def _start_container(self, image: DockerImage):
+    async def _start_container(self):
         """ Start container """
         # Is it an existing container?
         # TODO: This might be uneccessary if ipo gains some persitent memory over restarts
-        d = self.icond.docker
+        d = state.Icond.instance().docker
         try:
-            for container_name in container_name_generator(image):
+            for container_name in container_name_generator(self.deployment.image):
                 self.container_name = container_name
                 container = await d.containers.get(container_name)
-                log.debug('Possible container %s for %s found', container_name, self.image)
-                if self._valid_container(container, image):
+                log.debug('Possible container %s for %s found',
+                          container_name,
+                          self.deployment.image)
+                if self._valid_container(container):
                     break
 
             self._init_control_path()
         except docker.errors.NotFound:
-            log.debug('Container for %s not found, starting new', self.image)
+            log.debug('Container for %s not found, starting new', self.deployment.image)
             # The last container_name not to exist
             self._init_control_path()
             # Mount control socket into container
@@ -263,7 +266,7 @@ class Container:
                     'mode': 'ro',
                 },
             }
-            container = await d.containers.create(self.image,
+            container = await d.containers.create(self.deployment.image,
                                                   name = self.container_name,
                                                   volumes = volumes,
                                                   environment = self.deployment.environment,
@@ -275,50 +278,18 @@ class Container:
             # It failed to start, probably something wrong in the image, no need to keep
             # the failed container around
             await container.remove()
-            self.state = ContainerState.FAILED
-            self.emit_state()
+            await self.emit_state(ContainerState.FAILED)
             return
         return container
-
-    async def _publish_image(self):
-        """
-        Make sure this image is available in local repository
-        returns: The docker image discovered
-        """
-        d = self.icond.docker
-        image = await d.images.get(self.image)
-        repotag = f'localhost:5000/ipo/local/{self.image}:latest'
-
-        def has_tag() -> bool:
-            for tag in image.tags:
-                if tag == repotag:
-                    return True
-            return False
-
-        if not has_tag():
-            await image.tag(repotag)
-
-        await d.images.push(repotag)
-        return image
-
-    async def _get_image(self):
-        """ Fetch image from remote repository if not available locally """
-        d = self.icond.docker
-        log.debug('Pulling image %s from repository', self.image)
-        image =  await d.images.pull(self.image)
-        # Curiously, this seems to return a list even when not
-        # specifying to fetch all tags.
-        if isinstance(image, list):
-            return image[0]
-        # If the API changes to reflect the documentation some day
-        return image
 
     async def _is_container_running(self, container):
         """ Check regularly if the container is actually up """
         while True:
             await container.reload()
             if container.status != 'running':
-                log.debug('%s: Container status changed to %s', self.image, container.status)
+                log.debug('%s: Container status changed to %s',
+                          self.deployment.image,
+                          container.status)
                 break
             await asyncio.sleep(60)
 
@@ -333,8 +304,6 @@ class Container:
         container_running_task = task_runner.run(self._is_container_running(container))
 
         async for task in task_runner.wait_next():
-            if self.icond.shutdown:
-                break
             if task == command_task:
                 command = task.result()
                 self.inqueue.task_done()
@@ -344,41 +313,24 @@ class Container:
                 log.error('Failed to start connection server, aboring')
                 break
             elif task == container_running_task:
-                log.info('%s exited', self.image)
+                log.info('%s/%s exited', self.container_name, self.deployment.image)
                 break
 
         # Make sure there aren't any weird left-overs for next run
         task_runner.clear()
 
-    async def _run(self):
-        try:
-            if await is_local_image(self.image):
-                # Local image must be available in local repo for
-                # migration to happen
-                image = await self._publish_image()
-            else:
-                # We need to get/refresh the image from remote repo
-                image = await self._get_image()
-        except docker.errors.ImageNotFound as e:
-            log.warning('Image not found %s', e)
-            self.emit_state(ContainerState.FAILED)
-            return
-        except (docker.errors.APIError, docker.errors.InvalidRepository):
-            # Image URL was wrong or badly formatted?
-            log.warning('Invalid image %s?', self.image, exc_info = True)
-            self.emit_state(ContainerState.FAILED)
-            return
+    async def run(self):
+        """ Run container """
+        assert not self.is_running()
+        await self.emit_state(ContainerState.STARTING)
 
-        # Now we should have a valid image
-
-        container = await self._start_container(image)
+        container = await self._start_container()
         if container is None:
             log.error('Failed to start container')
             return
 
         # Now we have to wait for the client to connect
-        self.state = ContainerState.CONWAITING
-        self.emit_state()
+        await self.emit_state(ContainerState.CONWAITING)
 
         await self._handle_tasks(container)
 
@@ -389,8 +341,7 @@ class Container:
         # We don't remove the container by default, allowing hot re-starts of ICONs
         # (The container yard management sw should prune stale containers regularly)
         await container.stop()
-        self.state = ContainerState.STOPPED
-        self.emit_state()
+        await self.emit_state(ContainerState.STOPPED)
 
     def __str__(self):
-        return f'<Container: {self.image}>'
+        return f'<Container {self.container_name} for {self.deployment.image}>'
