@@ -140,6 +140,11 @@ class IconMessage(metaclass = MessageRegistry):
         return reply_cls(msg_id = self.msg_id, **data)
 
     @classmethod
+    def reply_to(cls, reply_msg: 'IconMessage', **kwargs) -> 'IconMessage':
+        """ Create a reply message to an existing message """
+        return cls(msg_id = reply_msg.msg_id, **kwargs)
+
+    @classmethod
     def from_dict(cls, source: dict) -> 'IconMessage':
         """ De-serialize class from dict """
         if not (cls.STR_TYPE in source and cls.STR_ID in source):
