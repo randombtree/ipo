@@ -4,6 +4,7 @@ ICOND global state
 import asyncio
 import socket
 import logging
+from typing import Optional
 
 from .. util.asynctask import AsyncTaskRunner
 from . asyncdocker import AsyncDockerClient
@@ -18,6 +19,7 @@ log = logging.getLogger(__name__)
 
 class Icond:
     """ Icond global state """
+    _instance: Optional['Icond'] = None            # Singleton
     docker: AsyncDockerClient
     shutdown: bool
     eventqueue: EventQueue
@@ -38,6 +40,14 @@ class Icond:
         self.router = RouteManager(self.config)
         self.ctrl = control.ControlServer(self)
         self.orchestrator = orchestrator.OrchestratorManager(self)
+        Icond._instance = self
+
+    @classmethod
+    def instance(cls) -> 'Icond':
+        """ Return Icond instance """
+        if cls._instance is None:
+            raise Exception('Icond hasn\'t been initialized?')
+        return cls._instance
 
     async def _shutdown_waiter(self):
         with self.subscribe_event(ShutdownEvent) as shutdown_event:
