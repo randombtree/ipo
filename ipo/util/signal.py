@@ -32,6 +32,9 @@ class Event:
     def __contains__(self, name):
         return name in self.kwargs
 
+    def __str__(self):
+        return f'<Event source: {self.source}, signal: {self.signal}, args: {self.kwargs}>'
+
 
 class SignalWaiter:
     """
