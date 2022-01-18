@@ -3,7 +3,9 @@ import asyncio
 from asyncio import Queue, Future
 from weakref import WeakSet
 from dataclasses import dataclass
+
 from typing import Union, Optional
+from collections.abc import Iterable
 
 
 @dataclass
@@ -64,7 +66,7 @@ class Signal:
     """
     slots: WeakSet[Queue]
     parent: Union['Signal', None]
-    instance: 'Emitter'
+    instance: Optional['Emitter']
     owner: Union[type, None]
     name: Union[str, None]
     asynchronous: bool
@@ -131,23 +133,37 @@ class Signal:
         # Since using weak sets, the queue will soon disappear
         return False
 
+    def __str__(self):
+        return f'<Signal {self.owner}.{self.name} {self.instance}>'
+
 
 class Emitter:
     """
     The base class for a class that emits events. To use Signals, use Emitter as a parent class.
     """
+    @staticmethod
+    def __recursive_init(classes: Iterable[type], instance):
+        bases: set[type] = set()
+        for cls in classes:
+            if cls is object:
+                continue
+            bases.update(cls.__bases__)
+            # Signals are defined in class conetext, but we want them to
+            # be per instance, populate the signals inside the instance with
+            # new signals
+            for attr in cls.__dict__:
+                val = getattr(cls, attr)
+                if isinstance(val, Signal):
+                    real_signal = Signal(parent = val,
+                                         instance = instance,
+                                         asynchronous = val.asynchronous)
+                    setattr(instance, attr, real_signal)
+        # Python doesn't do recursion optimization, so don't bother to optimize for it..
+        if len(bases) > 0:
+            Emitter.__recursive_init(bases, instance)
+
     def __new__(cls, *_args, **_kvargs):
         """ Create the Emit-capable instance """
         instance = super().__new__(cls)
-        # Signals are defined in class conetext, but we want them to
-        # be per instance, populate the signals inside the instance with
-        # new signals
-        for attr in cls.__dict__:
-
-            val = getattr(cls, attr)
-            if isinstance(val, Signal):
-                real_signal = Signal(parent = val,
-                                     instance = instance,
-                                     asynchronous = val.asynchronous)
-                setattr(instance, attr, real_signal)
+        Emitter.__recursive_init([cls], instance)
         return instance

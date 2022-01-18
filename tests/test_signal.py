@@ -1,6 +1,10 @@
-import unittest
+"""
+Test ipo.util.signal
+"""
 from unittest import IsolatedAsyncioTestCase
 from asyncio import Queue, QueueEmpty, wait_for
+
+from abc import ABCMeta, abstractmethod
 
 from ipo.util.signal import Signal, Emitter
 
@@ -18,8 +22,29 @@ class MyEmitter(Emitter):
 
 class SyncEmitter(Emitter):
     Signal1 = Signal(asynchronous = False)
+
     def emit(self, msg):
         self.Signal1(msg = msg)
+
+
+class AbstractEmitter(Emitter, metaclass = ABCMeta):
+    """" Abstract class that has signals """
+    MySignal = Signal()
+
+    async def emit(self, msg):
+        """ Emits a signal with msg as a parameter """
+        self.MySignal(msg = msg)
+
+    @abstractmethod
+    async def do_foo(self):
+        """ Child class should call emit """
+        ...
+
+
+class InheritedEmitter(AbstractEmitter):
+    """ Inherits signals from abstract class """
+    async def do_foo(self):
+        await self.emit(msg = 'From inherited')
 
 
 class TestSignal(IsolatedAsyncioTestCase):
@@ -79,3 +104,11 @@ class TestSignal(IsolatedAsyncioTestCase):
         event = queue.get_nowait()
         self.assertEqual(msg, event['msg'])
 
+    async def test_inherited(self):
+        """ Test signals inherited from a base class """
+        emitter = InheritedEmitter()
+        queue = Queue()
+        emitter.MySignal.connect(queue)
+        await emitter.do_foo()
+        event = await wait_for(queue.get(), timeout = 2)
+        self.assertIn('msg', event)
