@@ -247,11 +247,44 @@ class OrchestratorHello(IconMessage):
     REPLY_CLS = OrchestratorHelloReply
 
 
+class MigrationResponse(IconMessage):
+    """ Migration completed """
+    # Returns the IP address and port mappings for the new deployment.
+    FIELD_VALIDATORS = dict(ip = str, ports = dict)
+
+
+class MigrationRequest(IconMessage):
+    """ Ask for migration """
+    FIELD_VALIDATORS = dict(image_name = str, ports = list, environment = dict)
+
+
+class ShutdownCommand(IconMessage):
+    """ Send a command to remote """
+    REPLY_CLS = ReplyMsg
+
+
+class DeploymentStateChanged(IconMessage):
+    """ Send new deployment state """
+    FIELD_VALIDATORS = dict(state = str)
+
+
 class ClientHello(IconMessage):
     """ ICON container initialization message """
     FIELD_VALIDATORS = dict(version = None)
     REPLY_CLS = HelloReply
     ...
+
+
+class ClientMigrate(IconMessage):
+    """ ICON Container migration request """
+    FIELD_VALIDATORS = dict(ip = str, port = int)
+    REPLY_CLS = ReplyMsg
+    ...
+
+
+class ClientDeploymentStatus(IconMessage):
+    """ Update event from daemon to client on deployment """
+    FIELD_VALIDATORS = dict(state = str, ip = str, ports = dict)
 
 
 class BootstrapNode(IconMessage):
