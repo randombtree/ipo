@@ -7,7 +7,6 @@ to them.
 import asyncio
 from typing import Optional
 from collections.abc import Iterator
-from enum import Enum
 import os.path
 import socket
 import itertools
@@ -30,15 +29,11 @@ from .. events import (
 from ...api import message
 from ..messagetask import MessageTaskDispatcher, get_message_handlers
 from . import containertask
-from . deployment import DeploymentInfo, DeploymentCoordinator
+from . deployment import DeploymentInfo, DeploymentCoordinator, DeploymentState as ContainerState
 from . image import Image
 
 
 log = logging.getLogger(__name__)
-
-
-# Container states
-ContainerState = Enum('ContainerState', 'STOPPED STARTING CONWAITING RUNNING FAILED')
 
 
 def container_base_name(image_name: str) -> str:
@@ -239,6 +234,17 @@ class Container(Emitter):
                 return False
         return True
 
+    def _update_ports(self, container: DockerContainer):
+        """ Update dynamic ports to deployment info """
+        # Docker container port map will contain mappings like this
+        # {'8080/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '8080'}, {'HostIp': '::', 'HostPort': '8080'}]}
+        # We have it in a simpler form as we always assume IPv4/6 have the same mappings
+        # e.g. {'8080/tcp': 8080 }, note conversion to int port numbering!
+        log.debug('Original port mappings %s', self.deployment.ports)
+        self.deployment.ports = dict(map(lambda pmap: (pmap[0], int(pmap[1][0]['HostPort'])),
+                                         container.attrs['NetworkSettings']['Ports'].items()))
+        log.debug('Updated port mappings %s', self.deployment.ports)
+
     async def _start_container(self):
         """ Start container """
         # Is it an existing container?
@@ -266,7 +272,8 @@ class Container(Emitter):
                     'mode': 'ro',
                 },
             }
-            container = await d.containers.create(self.deployment.image,
+            log.debug('ports = %s, environment = %s', self.deployment.ports, self.deployment.environment)
+            container = await d.containers.create(self.deployment.image.full_name,
                                                   name = self.container_name,
                                                   volumes = volumes,
                                                   environment = self.deployment.environment,
@@ -274,12 +281,15 @@ class Container(Emitter):
         log.debug(container)
         try:
             await container.start()
+            await container.reload()   # Funny enough, start() doesn't update the container object :)
         except docker.errors.APIError:
             # It failed to start, probably something wrong in the image, no need to keep
             # the failed container around
             await container.remove()
             await self.emit_state(ContainerState.FAILED)
             return
+        # Update dynamic ports
+        self._update_ports(container)
         return container
 
     async def _is_container_running(self, container):

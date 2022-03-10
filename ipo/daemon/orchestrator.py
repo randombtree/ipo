@@ -2,13 +2,15 @@
 Connections to other orchestrators are handled here.
 """
 import asyncio
+from asyncio import Queue
 import logging
 from typing import Optional
 from enum import Enum
 
 from . events import ShutdownEvent
 from .. util.asynctask import AsyncTaskRunner
-from .messagetask import MessageTaskDispatcher
+from .messagetask import MessageTaskDispatcher, MessageTaskHandler, get_message_handlers
+from . import orchestratortask
 
 from ..api import message
 from . state import Icond
@@ -71,6 +73,7 @@ class Orchestrator(Emitter):
     """
     Represents a foreign orchestrator.
     """
+    HANDLERS = get_message_handlers(orchestratortask)
     Connected = Signal()
     Disconnected = Signal()
 
@@ -78,28 +81,45 @@ class Orchestrator(Emitter):
     peer_adr: tuple[str, int]
     icond: Icond
     connection: Optional[OrchestratorConnection]
+    inqueue: Queue
 
     def __init__(self, ip_port: tuple[str, int], icond: Icond):
         self.peer_addr = ip_port
         self.icond = icond
         self.connection = None
-        self.state = ConnectionState.CONNECTING
+        self.state = ConnectionState.DISCONNECTED
+        self.inqueue = Queue()
 
     def is_connected(self) -> bool:
         """ Is the orchestrator connected? """
-        return self.state == ConnectionState.CONNECTED
+        return self.state not in [ConnectionState.DISCONNECTED, ConnectionState.FAILED]
 
     async def new_connection(self, connection: OrchestratorConnection):
         """
         Run with a new connection. Will run until connection fails.
         """
+        self.state = ConnectionState.CONNECTED
         await self.Connected()  # type: ignore
         self.connection = connection
-        async with MessageTaskDispatcher(connection.reader, connection.writer, {}, self.icond) as dispatcher:
-            async for unhandled, outqueue in dispatcher:
-                ...
+        async with MessageTaskDispatcher(connection.reader, connection.writer, self.HANDLERS, self.icond) as dispatcher:
+            command_task = dispatcher.run_task(self.inqueue.get)
+            async for task, _outqueue in dispatcher:
+                if command_task == task:
+                    # Currently we are only fed new sessions
+                    handler_cls, params, queue = task.result()
+                    handler = dispatcher.new_session(handler_cls, msg = None, **params)
+                    await queue.put(handler)
+
+        log.debug('Disconnecting from orchestrator %s', self.peer_addr)
         self.state = ConnectionState.DISCONNECTED
         await self.Disconnected()  # type: ignore
+
+    async def start_session(self, handler_cls: type[MessageTaskHandler], **params) -> MessageTaskHandler:
+        """ Start a new session to communicate with the remote orchestrator """
+        log.debug('Start new session to remote orchestrator of type %s', handler_cls.__name__)
+        reply_queue: Queue[MessageTaskHandler] = Queue()
+        await self.inqueue.put((handler_cls, params, reply_queue))
+        return await reply_queue.get()
 
     async def connect(self):
         """
@@ -113,9 +133,33 @@ class Orchestrator(Emitter):
             await connection.initiate_handshake()
             await self.new_connection(connection)
         except OSError:
+            log.debug('Connect failed', exc_info = True)
             self.state = ConnectionState.FAILED
             # TODO: Retry etc.
             await self.Disconnected()  # type: ignore
+
+    async def wait_until_connected(self, timeout = None):
+        """ Convinience method for waiting until connected
+        throws ConnectionException if it times out or is disconnected.
+        """
+        if self.is_connected():
+            return
+        async with self.Connected as connected, self.Disconnected as disconnected:
+            done, pending = await asyncio.wait([connected, disconnected],
+                                               timeout = timeout,
+                                               return_when = 'FIRST_COMPLETED')
+            for t in pending:
+                t.cancel()
+            if len(done) < 1:
+                raise ConnectionException('Timed out')
+            # Perhaps under severe load there can could many signals queued..?
+            *_, last = done
+            event = last.result()
+            log.debug('Event: %s', event)
+            if event.signal == self.Disconnected:
+                raise ConnectionException('Disconnected')
+            # Ok, good to go for now
+            return
 
 
 class OrchestratorManager:
@@ -162,13 +206,17 @@ class OrchestratorManager:
         """
         Get an orchestrator for the supplied peer address
         """
+        log.debug('Get orchestrator %s', ip_port)
         if ip_port in self.orchestrators:
-            return self.orchestrators[ip_port]
-        log.info('Connecting to orchestrator at %s', ip_port)
-        orchestrator = Orchestrator(ip_port, self.icond)
-        self.orchestrators[ip_port] = orchestrator
-
-        self.runner.run(orchestrator.connect())
+            log.debug('Using existing orchestrator')
+            orchestrator = self.orchestrators[ip_port]
+        else:
+            log.debug('New orchestrator')
+            orchestrator = Orchestrator(ip_port, self.icond)
+            self.orchestrators[ip_port] = orchestrator
+        if not orchestrator.is_connected():
+            log.info('Connecting to orchestrator at %s', ip_port)
+            self.runner.run(orchestrator.connect())
         return orchestrator
 
     async def _handle_incoming(self, connection):

@@ -4,7 +4,7 @@ Container manager
 Manages starting and stopping of containers
 """
 import asyncio
-from typing import Union
+from typing import Union, Optional, cast
 import re
 import logging
 
@@ -13,7 +13,9 @@ from .container import Container
 from .deployment import DeploymentInfo
 from . coordinator import (
     ContainerCoordinator,
-    RootContainerCoordinator,
+    CoordinatorType,
+    ForeignDeploymentCoordinator,
+    RootDeploymentCoordinator,
 )
 from .. state import Icond
 from ... util.asynctask import AsyncTask, AsyncTaskRunner
@@ -87,6 +89,7 @@ class ContainerManager:
                     _r = task.result()
                     log.debug('Coordinator %s stopped', coordinator)
                 except Exception:
+                    # FIXME: use context handler?
                     log.critical('Exception in coordinator', exc_info = True)
                     # Better remove it alltogether as it's state is probably totally
                     # unpredictable
@@ -111,6 +114,27 @@ class ContainerManager:
             await asyncio.wait(waitfor)
         log.info('Containers shut-down..')
 
+    async def _start_coordinator(self, coordinator_cls: type[CoordinatorType], image_name: str, ports: dict[str, Optional[int]], environment: dict[str, str], foreign_prefix: str = "") -> CoordinatorType:
+        image = await Image(image_name)
+        # Make sure namespace is different
+        # TODO: Bring in foreign orchestrator to the namespace...
+        deployment_name = f'{foreign_prefix}-{image.full_name}' if foreign_prefix else image.full_name
+        if deployment_name in self.deployments:
+            return cast(CoordinatorType, self.deployments[deployment_name])
+        info = DeploymentInfo(image, ports, environment)
+
+        coordinator = coordinator_cls.create(info)
+        self.deployments[deployment_name] = coordinator
+        task = self.task_runner.run(coordinator.run())
+        self.tasks[task] = coordinator
+        return coordinator
+
+    async def start_foreign_icon(self, image_name: str, requested_ports: list[str], environment: dict[str, str]) -> ForeignDeploymentCoordinator:
+        """ Start a foreign container """
+        ports: dict[str, Optional[int]] = dict(map(lambda port: (port, None), requested_ports))
+        # FIXME: Need to include foreign orchestrator to prefix
+        return await self._start_coordinator(ForeignDeploymentCoordinator, image_name, ports, environment, foreign_prefix = 'foreign')
+
     async def start_local_icon(self, image_name: str, ports: dict, environment: dict) -> ContainerCoordinator:
         """
         Start a local ICON. The ICON will be the 'root' ICON and the coordination point of
@@ -118,22 +142,7 @@ class ContainerManager:
         returns: The coordinator for the ICON.
         Throws: ImageException if image_name is invalid.
         """
-        image = await Image(image_name)
-        return await self.start_local_icon_image(image, ports, environment)
-
-    async def start_local_icon_image(self, image: Image, ports: dict, environment: dict) -> ContainerCoordinator:
-        """ Start local icon image """
-        # FIXME: Need async at all?
-        if image in self.deployments:
-            # TODO: Deal with re-starting of containers?
-            return self.deployments[image.full_name]
-
-        info = DeploymentInfo(image, ports, environment)
-        coordinator = RootContainerCoordinator(info)
-        self.deployments[image.full_name] = coordinator
-        task = self.task_runner.run(coordinator.run())
-        self.tasks[task] = coordinator
-        return coordinator
+        return await self._start_coordinator(RootDeploymentCoordinator, image_name, ports, environment)
 
     def list(self) -> list[Container]:
         """ Return all the containers """
