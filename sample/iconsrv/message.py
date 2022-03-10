@@ -1,6 +1,7 @@
 """
 iconsrv messages
 """
+from typing import Union
 import aiohttp
 from aiohttp import web
 
@@ -9,6 +10,7 @@ import logging
 from ipo.api.message import (
     IconMessage,
     InvalidMessage,
+    Reply,
 )
 
 
@@ -25,11 +27,37 @@ class UserHello(IconMessage):
     REPLY_CLS = UserHelloReply
 
 
+class UserMigrateReply(Reply):
+    """ Reply to migrate message when user has successfully migrated """
+    ...
+
+
+class UserMigrate(IconMessage):
+    """ Migration message """
+    FIELD_VALIDATORS = dict(ip = str, port = int)
+    REPLY_CLS = UserMigrateReply
+
+
+class UserPayloadReply(Reply):
+    """ Payload reply """
+    FIELD_VALIDATORS = dict(data = str)
+
+
+class UserPayloadMessage(IconMessage):
+    """ Payload message """
+    FIELD_VALIDATORS = dict(data = str)
+    REPLY_CLS = UserMigrateReply
+
+
+# aiohttp should really provide an interface class
+WebSocketResponse = Union[aiohttp.ClientWebSocketResponse, web.WebSocketResponse]
+
+
 class MessageSocket:
     """ ICON messaging over WS """
-    ws: web.WebSocketResponse
+    ws: WebSocketResponse
 
-    def __init__(self, ws: web.WebSocketResponse):
+    def __init__(self, ws: WebSocketResponse):
         self.ws = ws
 
     async def receive(self) -> IconMessage:
