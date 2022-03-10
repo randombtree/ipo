@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from typing import (
     Union,
     Type,
+    TypeVar,
     Optional,
     Any,
     AsyncGenerator,
@@ -59,6 +60,14 @@ class MessageTaskHandler(metaclass = ABCMeta):
         """ Post a new message to the handler """
         self.events.put_nowait(MessageEvent(msg))
 
+    async def _sendmsg(self, msg_cls: type[IconMessage], **params):
+        """
+        Quck message sending; requires session_id construction or msg_id parameter
+        """
+        assert 'msg_id' in params or hasattr(self, 'session_id')
+        session_id = params.pop('msg_id') if 'msg_id' in params else getattr(self, 'session_id')
+        await self._send(msg_cls(msg_id = session_id, **params))
+
     async def _send(self, msg: IconMessage):
         await self.outqueue.put(msg)
 
@@ -96,6 +105,22 @@ class MessageTaskHandler(metaclass = ABCMeta):
     async def __aexit__(self, exc_type, exc, tb):
         self._mark_message_handled()
         return False
+
+    def __aiter__(self):
+        return self._async_iter()
+
+    async def _async_iter(self):
+        # ITerator helper
+        # Iterate until a shutdown event is received
+        while True:
+            event = await self
+            if isinstance(event, ShutdownEvent):
+                # Don't mark message handled, upstream must mark it when
+                # it has completed its shutdown..
+                raise StopAsyncIteration()
+            yield event
+            # Control is back, event has been handled!
+            self._mark_message_handled()
 
     @abstractmethod
     async def handler(self, initial_msg: message.IconMessage):
@@ -182,6 +207,9 @@ class ConnectionClosedException(Exception):
     ...
 
 
+MessageHandlerType = TypeVar('MessageHandlerType', bound = MessageTaskHandler)
+
+
 class MessageTaskDispatcher:
     """
     Simple message -> handler mapper.
@@ -205,14 +233,14 @@ class MessageTaskDispatcher:
     msg_handlers: dict[str, MessageTaskHandler]
     msg_tasks: set[AsyncTask]
 
-    def __init__(self, reader: StreamReader, writer: StreamWriter, handlers: MessageToHandler, icond: Optional[Icond], **handler_params):
+    def __init__(self, reader: StreamReader, writer: StreamWriter, handlers: MessageHandlerMapping, icond: Optional[Icond], **handler_params):
         """
         If Icond is provided, will watch for shutdown event and exit gracefully when that happens. Else the
         caller must handle it self (e.g. cancel)
         """
         self.flusher = MessageFlusher(writer)
         self.reader = MessageReader(reader)
-        self.handlers = handlers
+        self.handlers = dict(handlers)
         self.icond = icond
         self.handler_params = handler_params
 
@@ -240,8 +268,33 @@ class MessageTaskDispatcher:
         return self.runner.run(task, *params, restartable = restartable)
 
     def add_session(self, sessid: str, handler: MessageTaskHandler):
-        """ Add a new session handler """
+        """
+        Add a new session handler. This won't generally do much as it only can receive messages,
+        concider using new_session for a more flexible handler.
+        DEPRECATED!
+        """
         self.msg_handlers[sessid] = handler
+
+    def new_session(self, handler_cls: type[MessageHandlerType], msg: message.IconMessage = None, **kwargs) -> MessageHandlerType:
+        """
+        Start a new handler specified by handler_cls, allocating a new ID.
+        """
+        # TODO: MessageTaskHandler needs a rewamp, but work around with this quirk
+        # Handle both incoming and outgoing messages in one ugly swoop
+        while msg is None:
+            msg = message.IconMessage()
+            # Paranoid: This shouldn't happen with UUIDs
+            if msg.msg_id in self.msg_handlers:
+                msg = None
+            else:
+                log.debug('New outbound session %s', msg.msg_id)
+        handler = handler_cls(self.flusher.queue, icond = self.icond, session_id = msg.msg_id, **kwargs)
+        self.msg_handlers[msg.msg_id] = handler
+        # A 'new' outbound connection will get the initialization message with the correct ID.
+        task = self.runner.run(handler.handler(msg),
+                               restartable = False)
+        self.msg_tasks.add(task)
+        return handler
 
     async def _process_messages(self) -> AsyncGenerator[tuple[Union[AsyncTask, IconMessage], Queue], None]:
         """
@@ -263,10 +316,8 @@ class MessageTaskDispatcher:
                 else:
                     t = type(msg)
                     if t in self.handlers:
-                        handler = self.handlers[t](self.flusher.queue, icond = self.icond, **self.handler_params)
-                        msg_tasks.add(self.runner.run(handler.handler(msg),
-                                                      restartable = False))
-                        msg_handlers[msg.msg_id] = handler
+                        log.debug('Message starts new inbound session')
+                        self.new_session(self.handlers[t], msg, **self.handler_params)
                     else:
                         log.debug('Not handling message %s', msg)
                         yield (msg, self.flusher.queue)
@@ -304,7 +355,7 @@ class MessageTaskDispatcher:
         # Some operations can take quite a while to finish in task handlers
         # so we really don't want to start canceling stuff that might lead to
         # really weird mid-states.
-        log.debug('Waiting for tasks to finish')
+        log.debug('Waiting for tasks to finish', exc_info = (exc_type, exc_value, traceback))
         if self.msg_tasks:
             await asyncio.wait(map(lambda t: t.asynctask, self.msg_tasks))
         suppress_exc = False
