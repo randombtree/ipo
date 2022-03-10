@@ -64,7 +64,7 @@ class Signal:
     Waiting for signals can be done using the connect method, or using the async context handler,
     e.g. 'async with obj.Signal as signal' and awaiting the returned signal object.
     """
-    slots: WeakSet[Queue]
+    slots: WeakSet[Queue[Event]]
     parent: Union['Signal', None]
     instance: Optional['Emitter']
     owner: Union[type, None]
@@ -119,7 +119,7 @@ class Signal:
             return True
         return False
 
-    def connect(self, queue: Queue):
+    def connect(self, queue: Queue[Event]):
         """ Add a receiver of events """
         self.slots.add(queue)
 
