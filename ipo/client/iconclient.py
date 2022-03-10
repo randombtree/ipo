@@ -8,13 +8,15 @@ from typing import Optional
 
 from ..util.signal import Signal, Emitter
 from ..api import message
-from ..daemon.messagetask import MessageTaskDispatcher, MessageTaskHandler
+from ..daemon.messagetask import MessageTaskDispatcher, MessageHandlerType
 from . import user
+from . import deploymentproxy
 
 log = logging.getLogger(__name__)
 
 
 class NotConnectedException(Exception):
+    """ Raised when orchestrator cannot be reached """
     ...
 
 
@@ -35,6 +37,7 @@ class IconClient(Emitter):
     inqueue: Queue
     _task: Optional[Task]
     state: ClientState
+    deployments: dict[tuple[str, int], deploymentproxy.DeploymentProxy]
 
     def __init__(self, sockname = '/run/icond/icon.sock'):
         """
@@ -45,6 +48,7 @@ class IconClient(Emitter):
         self._task = None
         self.state = ClientState.DISCONNECTED
         self.inqueue = Queue()
+        self.deployments = {}
 
     async def connect(self):
         """
@@ -67,6 +71,17 @@ class IconClient(Emitter):
             raise NotConnectedException('Orchestrator cannot be reached')
         return user.User(self, ip)
 
+    async def migrate_to(self, ip: str, port: int) -> deploymentproxy.DeploymentProxy:
+        """ Migrate ICON to another orchestrator """
+        addr = (ip, port)
+        if addr in self.deployments:
+            # TODO: Account for failed migrations
+            log.debug('Already migrated to %s:%d', ip, port)
+            return self.deployments[addr]
+        proxy = await self.start_session(deploymentproxy.DeploymentProxy, ip = ip, port = port)
+        self.deployments[addr] = proxy
+        return proxy
+
     async def disconnect(self):
         """ Disconnect from orchestrator """
         if self.state in (ClientState.CONNECTING, ClientState.CONNECTED):
@@ -87,16 +102,17 @@ class IconClient(Emitter):
                         # TODO: Version etc.
                         self.state = ClientState.CONNECTED
                         await self.Connected()
-                        continue
                     else:
                         log.warning('Messages received while waiting for handshake? Disconnect!')
                         break
-                if unhandled == command_task:
+                elif unhandled == command_task:
                     command = command_task.result()
                     # Currently only new sessions, so we go with this simple tuple
-                    msg, handler = command
-                    await dispatcher.write(msg)
-                    dispatcher.add_session(msg.msg_id, handler)
+                    # Also see start_session
+                    handler_cls, params, queue = command
+                    handler = dispatcher.new_session(handler_cls, msg = None, **params)
+                    await queue.put(handler)
+
                 else:
                     log.error('Unhandled %s', unhandled)
 
@@ -105,9 +121,13 @@ class IconClient(Emitter):
             self.state = ClientState.DISCONNECTED
             await self.Disconnected()
 
-    async def start_session(self, initial_msg: message.IconMessage, handler: MessageTaskHandler):
+    async def start_session(self, handler_cls: type[MessageHandlerType], **params) -> MessageHandlerType:
         """ Start a new session to communicate with the orchestrator """
-        await self.inqueue.put((initial_msg, handler))
+        # TODO: Merge orchestrator start_session logic with this
+        log.debug('Start new session to orchestrator of type %s', handler_cls.__name__)
+        reply_queue: Queue[MessageHandlerType] = Queue()
+        await self.inqueue.put((handler_cls, params, reply_queue))
+        return await reply_queue.get()
 
     async def _run(self):
         while not self.state == ClientState.SHUTDOWN:
