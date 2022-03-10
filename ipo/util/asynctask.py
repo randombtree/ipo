@@ -1,6 +1,7 @@
 """ Async Task tracking and waiting capabilities """
 import asyncio
 from asyncio import Task
+from contextlib import asynccontextmanager
 from typing import (
     Set,
     Protocol,
@@ -8,7 +9,9 @@ from typing import (
     Callable,
     cast,
     AsyncGenerator,
+    AsyncIterator,
     Coroutine,
+    Optional,
 )
 from collections.abc import Awaitable, Iterable
 from inspect import iscoroutinefunction
@@ -128,6 +131,27 @@ class AsyncTaskRunner:
         self.wakeup = asyncio.Queue()  # Wakeup queue
         self.wtask = AsyncTask(self.wakeup.get)
         self.start_task(self.wtask)
+
+    @staticmethod
+    @asynccontextmanager
+    async def create(exit_timeout: Optional[float] = None) -> AsyncIterator['AsyncTaskRunner']:
+        """
+        Create a context managed task runner.
+        The context manager will make sure all tasks are cancelled and waited for
+        before resuming.
+
+        exit_timeout:   Wait this long for tasks to exit.
+
+        raises TimeoutError if exit_timeout is reached and tasks are still left.
+        """
+        runner = AsyncTaskRunner()
+        yield runner
+        for task in runner.active.values():
+            task.cancel()
+        _done, pending = await asyncio.wait([t.asynctask for t in runner.active.values()],
+                                            timeout = exit_timeout)
+        if exit_timeout is not None and len(pending) > 0:
+            raise TimeoutError('There were tasks left')
 
     def start_task(self, task: AsyncTask):
         """ Add and start the task """
