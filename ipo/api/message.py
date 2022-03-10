@@ -62,6 +62,9 @@ class MessageRegistry(type):
         raise MessageTypeNotFoundException(f'{name} is not a valid message')
 
 
+IconId = uuid.UUID   # ICON message id type
+
+
 class IconMessage(metaclass = MessageRegistry):
     """ Icon message base / Factory """
     # Avoid using naked string literals for message fields
@@ -72,7 +75,7 @@ class IconMessage(metaclass = MessageRegistry):
     REPLY_CLS = 'Reply'        # type: Union[None, str, type]  # Create a reply message using this class
 
     data: dict[str, str]
-    msg_id: uuid.UUID
+    msg_id: IconId
 
     def __init__(self, *, msg_id = None, **data):
         self.data = data.copy()
@@ -81,7 +84,7 @@ class IconMessage(metaclass = MessageRegistry):
             uuid.UUID(msg_id) if isinstance(msg_id, str) \
             else uuid.UUID(msg_id['id']) if isinstance(msg_id, dict) \
             else msg_id if isinstance(msg_id, uuid.UUID) \
-            else uuid.uuid4()  # Swallow erronous msg_id here for simplicity
+            else IconMessage.gen_id()  # Swallow erronous msg_id here for simplicity
 
         # Validate fields
         for field, validator in self.FIELD_VALIDATORS.items():
@@ -101,6 +104,17 @@ class IconMessage(metaclass = MessageRegistry):
                             raise InvalidMessage(f'{clsname} field {field} of invalid type {vtype} ({value}), expected {validator}') from e
                 elif not validator(value):
                     raise InvalidMessage(f'{clsname} field {field} of invalid value {value}')
+
+    @staticmethod
+    def gen_id() -> IconId:
+        """ Generate new uuid """
+        return uuid.uuid4()
+
+    @staticmethod
+    def id_generator():
+        """ Generate a continous list of message id's """
+        while True:
+            yield IconMessage.gen_id()
 
     def __getitem__(self, key):
         return self.data[key]
@@ -164,6 +178,11 @@ class IconMessage(metaclass = MessageRegistry):
     def from_json(cls, source: str) -> 'IconMessage':
         """ De-serialize from json """
         return cls.from_dict(json.loads(source))
+
+    @classmethod
+    def match(cls, msg: 'IconMessage') -> bool:
+        """ Quick hand for checking if msg is of our type """
+        return isinstance(msg, cls)
 
     def __str__(self):
         return f'{self.__class__.__name__}: {self.msg_id} {self.data}'
