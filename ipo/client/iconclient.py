@@ -65,7 +65,7 @@ class IconClient(Emitter):
         self.state = ClientState.CONNECTING
         self._task = asyncio.create_task(self._run())
 
-    async def new_user(self, ip: str) -> user.User:
+    async def new_user(self, ip: str) -> 'user.User':
         """ Add new ICON user """
         if not self.state == ClientState.CONNECTED:
             raise NotConnectedException('Orchestrator cannot be reached')
