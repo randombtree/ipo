@@ -27,9 +27,10 @@ euid=$(test x$EUID != x && echo $EUID || id -u)
 if [ $euid -ne 0 ];then
     read -p "Docker probably needs root; use it [y/N]?" answer
     if [ x$answer = xy ] || [ x$answer = xY ];then
-	SUDO="sudo"
+	SUDO="sudo PYTHON=$PYTHON"
     fi
 fi
+
 # Use docker directly (ipo cmd also does it, but uses internal api) to init and push
 $SUDO sh -c 'bin/ipo misc init_registry && docker image push localhost:5000/ipo/icon:latest'
 
