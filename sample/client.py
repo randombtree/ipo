@@ -8,6 +8,8 @@ from asyncio import Queue
 import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
+import time
+import collections
 from typing import Optional, AsyncIterator
 
 import aiohttp
@@ -25,6 +27,49 @@ from ipo.util.signal import Signal, Emitter, Event
 
 
 log = logging.getLogger(__name__)
+
+
+class ClientStats:
+    """ Collector of client stats """
+    _instance: Optional['ClientStats'] = None
+    timer_offset: int
+    events: dict[str, list[int]]
+
+    def __init__(self):
+        ClientStats._instance = self
+        self.timer_offset = 0
+        self.events = collections.defaultdict(list)
+
+    def _record(self, event: str):
+        now = time.monotonic_ns()
+        if self.timer_offset == 0:
+            self.timer_offset = now
+        # First event starts at 0
+        self.events[event].append(now - self.timer_offset)
+
+    @classmethod
+    def record(cls, event: str):
+        """ Record timestamp for event """
+        cls.instance()._record(event)
+
+    @classmethod
+    def init(cls):
+        """ Initialize this singleton """
+        _i = cls()
+
+    @classmethod
+    def instance(cls) -> 'ClientStats':
+        """ Get singleton instance """
+        assert cls._instance is not None
+        return cls._instance
+
+    def _dump(self) -> str:
+        return '\n'.join([f'{k}: {v}' for k, v in self.events.items()])
+
+    @classmethod
+    def dump(cls) -> str:
+        """ Dump stats to string format """
+        return cls.instance()._dump()
 
 
 class ClientConnection:
@@ -54,8 +99,10 @@ class ClientConnection:
         """
         url = f'http://{host}/ws'
         log.debug('Connecting to %s', url)
+        ClientStats.record('ws_connect')
         async with session.ws_connect(url) as ws:
             log.debug('Connected (ws) to %s', url)
+            ClientStats.record('ws_connected')
             yield ClientConnection(ws)
         log.debug('Disconnected from %s', url)
 
@@ -134,15 +181,18 @@ class SrvSession(Emitter):
             # We do a bit of magic, but since async tasks aren't really multithreaded
             # playing around with the external stack "should be ok"
             log.debug('Trying to connect to %s', host)
+            ClientStats.record('connecting')
             async with AsyncExitStack() as stack:
                 connection = await stack.enter_async_context(
                     ClientConnection.connect(host, self.parent.session))
+                ClientStats.record('UserHello_sent')
                 await connection.send(UserHello())
                 # Don't wait forever for a reply..
                 msg = await asyncio.wait_for(connection.receive(), timeout = 10)
                 if not isinstance(msg, UserHelloReply):
                     log.error('Handshake error, invalid message %s', msg)
                     raise Exception('Failed connecting')
+                ClientStats.record('UserHelloReply_received')
                 # FUTURE: Logged in user handling
                 new_stack = stack.pop_all()
                 # Now it's ready to be moved to the connecting stack
@@ -167,6 +217,7 @@ class SrvSession(Emitter):
                 elif self.connect_task == task:
                     connect_task = None
                     connection: ClientConnection = result
+                    ClientStats.record('connected')
                     if self.connection_active is not None:
                         # Don't want to miss in flight data, close connection after a
                         # 'reasonable' timeout.
@@ -178,6 +229,7 @@ class SrvSession(Emitter):
                             self.recv_tasks[-1],        # Last is always the 'active'
                             disconnecting_stack))
                         log.debug('Switching active connection ...')
+                        ClientStats.record('switch')
                     else:
                         log.debug('Connected..')
                     self.connection_active = connection
@@ -206,6 +258,7 @@ class SrvSession(Emitter):
                         if connect_task is not None:
                             log.warning('Migration message while migration in progress?')
                             continue
+                        ClientStats.record('migrate_received')
                         # Start connecting to other server
                         self.connect_task = self.runner.run(
                             self.try_connect(f'{ip}:{port}'))
@@ -251,7 +304,7 @@ class SrvSession(Emitter):
             yield srv
             log.debug('Ending session')
             await srv.cmd_queue.put(SrvShutdownEvent())
-            asyncio.wait_for(task, timeout = 10)
+            await asyncio.wait_for(task, timeout = 10)
             # Remove cleanup
             stack.pop_all()
 
@@ -259,6 +312,7 @@ class SrvSession(Emitter):
 async def communicate(host):
     """ Communicate with srv ICON """
     async with AsyncExitStack() as stack:
+        ClientStats.record('start')
         runner = await stack.enter_async_context(AsyncTaskRunner.create(exit_timeout = 10))
         srv = await stack.enter_async_context(SrvSession.start(host))
 
@@ -266,6 +320,8 @@ async def communicate(host):
         srv.Connected.connect(event_queue)
         read_task = runner.run(srv.receive)
         event_task = runner.run(event_queue.get)
+        quit_task = None
+        connected_events = 0
 
         async for task in runner:
             result = task.result()
@@ -275,8 +331,17 @@ async def communicate(host):
                 event: Event = result
                 if event.is_signal(srv.Connected):
                     log.info('Connected')
+                    connected_events += 1
+                    ClientStats.record('upper_connected')
+                    # Quit after migrate
+                    # TODO: Specify different exit parameters
+                    if connected_events == 2:
+                        quit_task = runner.run(asyncio.sleep(1))
                 else:
                     log.error('Unhandled event %s', event)
+            elif quit_task == task:
+                log.debug('Done, quitting')
+                break
 
 
 async def main(argv):
@@ -293,7 +358,10 @@ async def main(argv):
     root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(log_handler)
 
+    ClientStats.init()
+
     await communicate(host)
+    print(ClientStats.dump())
 
 if __name__ == '__main__':
     asyncio.run(main(sys.argv))
