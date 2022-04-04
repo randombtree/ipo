@@ -151,6 +151,8 @@ class RemoteDeploymentMonitor(RemoteDeployment, MessageTaskHandler):
                 if isinstance(event, ShutdownEvent):
                     log.debug('Shutting down')
                     await self._send(message.ShutdownCommand.reply_to(initial_msg))
+                    self.remote_ip = self.remote_ports = None
+                    await self.set_state(DeploymentState.STOPPED)
                     # No need to wait.. remote will shut down container later due to missing uplink
                     return
                 assert isinstance(event, MessageEvent)
