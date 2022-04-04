@@ -37,6 +37,10 @@ class DeploymentProxy(Emitter, MessageTaskHandler):
         Emitter.__init__(self)
         MessageTaskHandler.__init__(self, *args, **kwargs)
 
+    def is_running(self):
+        """ Is this deployment state still running. """
+        return self.state not in [DeploymentState.STOPPED, DeploymentState.FAILED]
+
     async def emit_state(self):
         """ Force to emit the current state """
         await self.StateChanged(state = self.state,

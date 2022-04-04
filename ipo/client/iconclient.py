@@ -73,8 +73,11 @@ class IconClient(Emitter):
         addr = (ip, port)
         if addr in self.deployments:
             # TODO: Account for failed migrations
-            log.debug('Already migrated to %s:%d', ip, port)
-            return self.deployments[addr]
+            proxy = self.deployments[addr]
+            if proxy.is_running():
+                log.debug('Already migrated to %s:%d', ip, port)
+                return proxy
+            # Proxy has gone stale, replace with new
         proxy = await self.start_session(deploymentproxy.DeploymentProxy, ip = ip, port = port)
         self.deployments[addr] = proxy
         return proxy
