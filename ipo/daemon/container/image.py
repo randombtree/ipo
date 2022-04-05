@@ -136,7 +136,7 @@ class Image:
         if not has_tag():
             # To publish an image, it must be tagged with the repo tag
             log.debug('Tagging image %s', self.image_name)
-            await docker_image.tag(repo_tag)
+            await docker_image.tag(repo_tag, force = True)
 
         log.debug('Push image %s to repo', self.image_name)
         # Always make sure the image is up to date in repository
@@ -150,11 +150,13 @@ class Image:
         d = state.Icond.instance().docker
         m = self.match
         host = m.group('host')
+        port = m.group('port')
         rel = m.group('rel')
         name = m.group('name')
+        path = m.group('path')
         log.debug('Pulling image %s from repository at %s (%s)', name, host, self.image_name)
         self.full_name = self.image_name
-        image_ret =  await d.images.pull(self.image_name)
+        image_ret =  await d.images.pull(f'{host}:{port}{path}/{name}', tag = rel)
         # FIXME: This short name needs coordination for duplicates
         self.image_name = f'{host}_{name}_{rel}'
         # Curiously, this seems to return a list even when not
