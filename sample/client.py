@@ -4,13 +4,13 @@ ICON sample client application
 """
 import sys
 import asyncio
-from asyncio import Queue
+from asyncio import Queue, Task
 import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 import time
 import collections
-from typing import Optional, AsyncIterator
+from typing import Optional, AsyncIterator, Tuple, Any
 
 import aiohttp
 
@@ -100,7 +100,7 @@ class ClientConnection:
         url = f'http://{host}/ws'
         log.debug('Connecting to %s', url)
         ClientStats.record('ws_connect')
-        async with session.ws_connect(url) as ws:
+        async with session.ws_connect(url, timeout = 1) as ws:
             log.debug('Connected (ws) to %s', url)
             ClientStats.record('ws_connected')
             yield ClientConnection(ws)
@@ -188,7 +188,14 @@ class SrvSession(Emitter):
                 ClientStats.record('UserHello_sent')
                 await connection.send(UserHello())
                 # Don't wait forever for a reply..
-                msg = await asyncio.wait_for(connection.receive(), timeout = 10)
+                log.debug('Wait for hello..')
+
+                def log_error():
+                    log.error('Timeout waiting for hello')
+
+                stack.callback(log_error)
+
+                msg = await asyncio.wait_for(connection.receive(), timeout = 5)
                 if not isinstance(msg, UserHelloReply):
                     log.error('Handshake error, invalid message %s', msg)
                     raise Exception('Failed connecting')
@@ -287,11 +294,16 @@ class SrvSession(Emitter):
         log.debug('Starting srv')
         async with AsyncExitStack() as stack:
             runner = await SrvSession.SrvRunner.create(self, stack)
+
+            def log_end():
+                log.debug('Stopping srv')
+
+            stack.callback(log_end)
             await runner.run()
 
     @classmethod
     @asynccontextmanager
-    async def start(cls, initial_host: str) -> AsyncIterator['SrvSession']:
+    async def start(cls, initial_host: str) -> AsyncIterator[Tuple['SrvSession', Task[Any]]]:
         """ Start a session to ICON srv """
         srv = SrvSession(initial_host)
         async with AsyncExitStack() as stack:
@@ -301,7 +313,7 @@ class SrvSession(Emitter):
                 log.error('Srv session didn\'t exit?')
                 task.cancel()
             stack.callback(cleanup)
-            yield srv
+            yield (srv, task)
             log.debug('Ending session')
             await srv.cmd_queue.put(SrvShutdownEvent())
             await asyncio.wait_for(task, timeout = 10)
@@ -314,8 +326,10 @@ async def communicate(host):
     async with AsyncExitStack() as stack:
         ClientStats.record('start')
         runner = await stack.enter_async_context(AsyncTaskRunner.create(exit_timeout = 10))
-        srv = await stack.enter_async_context(SrvSession.start(host))
+        (srv, srv_task) = await stack.enter_async_context(SrvSession.start(host))
 
+        print(srv_task, type(srv_task))
+        srv_task = runner.add_task(srv_task)
         event_queue = Queue()
         srv.Connected.connect(event_queue)
         read_task = runner.run(srv.receive)
@@ -339,6 +353,9 @@ async def communicate(host):
                         quit_task = runner.run(asyncio.sleep(1))
                 else:
                     log.error('Unhandled event %s', event)
+            elif srv_task == task:
+                log.debug('srv task quit unexpectedly, exit')
+                break
             elif quit_task == task:
                 log.debug('Done, quitting')
                 break
