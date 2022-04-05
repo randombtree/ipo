@@ -8,6 +8,7 @@ from typing import (
     Union,
     Callable,
     cast,
+    Any,
     AsyncGenerator,
     AsyncIterator,
     Coroutine,
@@ -41,11 +42,11 @@ class AsyncTask:
     """
     Wrapper around some async task to be run in the AsyncTaskRunner
     """
-    fctry: AsyncFctryProtocol
+    fctry: Optional[AsyncFctryProtocol]
     _restartable: bool
     _asynctask: Union[Task, None]
 
-    def __init__(self, fctry: RunnableTask, *params, restartable: bool = True):
+    def __init__(self, fctry: Union[RunnableTask, Task[Any]], *params, restartable: bool = True):
         """
         fctry: The factory method that creates an async task to wait for. It can also be an async
                function in which case it will be run inside a task.
@@ -53,11 +54,17 @@ class AsyncTask:
         restartable: If set to false the factory method will run only once (and be removed once
                      ready).
         """
+        if isinstance(fctry, Task):
+            # Plain task
+            self._asynctask = fctry
+            self.fctry = None
+            self._restartable = False
+            return
         if isinstance(fctry, Coroutine):
             restartable = False  # Coroutines can't be re-started
             fctry = self.coroutine_factory(cast(Coroutine, fctry))
         elif iscoroutinefunction(fctry):
-            coroutine: CoroutineFunc = fctry   # To make type checking happy
+            coroutine: CoroutineFunc = cast(CoroutineFunc, fctry)   # To make type checking happy
 
             def task_fctry() -> Task:
                 return asyncio.create_task(coroutine(*params))
@@ -159,6 +166,13 @@ class AsyncTaskRunner:
         self.active[asynctask] = task
         # Wakeup waiting task if done from other async task
         self._maybe_wakeup()
+
+    def add_task(self, task: Task):
+        asynctask = AsyncTask(task)
+        self.active[task] = asynctask
+        # Wakeup waiting task if done from other async task
+        self._maybe_wakeup()
+        return asynctask
 
     def run(self, fctry: RunnableTask, *params, restartable: bool = True) -> AsyncTask:
         """
