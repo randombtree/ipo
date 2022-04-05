@@ -117,7 +117,7 @@ class MessageTaskHandler(metaclass = ABCMeta):
             if isinstance(event, ShutdownEvent):
                 # Don't mark message handled, upstream must mark it when
                 # it has completed its shutdown..
-                raise StopAsyncIteration()
+                return
             yield event
             # Control is back, event has been handled!
             self._mark_message_handled()
