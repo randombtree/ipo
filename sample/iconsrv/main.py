@@ -12,6 +12,7 @@ from aiohttp import web
 
 from ipo.client.user import User
 from ipo.client.deploymentproxy import DeploymentProxy, DeploymentState
+from ipo.client.exceptions import NotConnectedException
 from ipo.util.signal import Event
 from ipo.util.messagestream import (
     MessageStreamManager,
@@ -133,7 +134,11 @@ async def websocket_handler(request):
         log.warning('Invalid hello from %s', request.remote)
         return ws
     # Register this "user"
-    user = await state.client.new_user(request.remote)
+    try:
+        user = await state.client.new_user(request.remote)
+    except NotConnectedException:
+        log.debug('Refusing connection as we aren\'t connected to orchestrator')
+        return ws
     await ms.send(UserHelloReply(session_id = 'todo'))
     async with MessageStreamManager.handle(ms, ms, user = user, remote = request.remote) as manager:
         manager.new_session(ClientMigrationHandler)
