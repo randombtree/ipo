@@ -11,13 +11,10 @@ from ..api import message
 from ..daemon.messagetask import MessageTaskDispatcher, MessageHandlerType
 from . import user
 from . import deploymentproxy
+from . exceptions import NotConnectedException
+
 
 log = logging.getLogger(__name__)
-
-
-class NotConnectedException(Exception):
-    """ Raised when orchestrator cannot be reached """
-    ...
 
 
 class ClientState(Enum):
