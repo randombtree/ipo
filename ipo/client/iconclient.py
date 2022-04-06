@@ -116,6 +116,9 @@ class IconClient(Emitter):
         if self.state == ClientState.CONNECTED:
             log.debug('Disconnected..')
             self.state = ClientState.DISCONNECTED
+            # We can't be sure that we didn't miss some updates, and no re-synch is currently done
+            # => clear out our cached deployments, they are toast anyway
+            self.deployments = {}
             await self.Disconnected()
 
     async def start_session(self, handler_cls: type[MessageHandlerType], **params) -> MessageHandlerType:
