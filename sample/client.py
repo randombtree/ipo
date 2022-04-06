@@ -100,7 +100,7 @@ class ClientConnection:
         url = f'http://{host}/ws'
         log.debug('Connecting to %s', url)
         ClientStats.record('ws_connect')
-        async with session.ws_connect(url, timeout = 1) as ws:
+        async with session.ws_connect(url, timeout = 5) as ws:
             log.debug('Connected (ws) to %s', url)
             ClientStats.record('ws_connected')
             yield ClientConnection(ws)
