@@ -6,6 +6,8 @@ up the overall command line experience.
 """
 import socket
 import argparse
+import logging
+
 from collections.abc import Iterable
 from .api import message
 from . import argparsehelper
@@ -117,6 +119,15 @@ class PortChecker(Iterable):
         yield 1
 
 
+def log_level_list() -> list[str]:
+    """ List log levels in order MOST -> LEAST """
+    # Sadly, logging doesn't provide a public way to list all levels
+    # logging._levelToName contains these, but depending on it is hazardous..
+    return list(map(str.lower,
+                    filter(lambda s: not s.startswith('Level'),
+                           map(logging.getLevelName, range(1, 100)))))
+
+
 def add_subcommand(subparser: argparsehelper.AddParser):
     """
     Add subcommand details to a subparser.
@@ -130,6 +141,11 @@ def add_subcommand(subparser: argparsehelper.AddParser):
     start = action.add_parser('start', help = 'Start the ICON daemon')
     start.set_defaults(func = start_daemon)   # 'Hack' to give a callpoint for main parser
     start.add_argument('--force', default = False, action = 'store_true')   # Force starting, omitting checks..
+    start.add_argument('--log', '-l', choices = log_level_list(),
+                       help = 'Change log level')
+
+    start.add_argument('--debug', action = 'store_true',
+                       help = 'Set debugging mode on; overrides log level setting!')
 
     stop = action.add_parser('stop', help = 'Stop the ICON daemon')
     stop.set_defaults(func = stop_daemon)

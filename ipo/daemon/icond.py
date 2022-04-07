@@ -73,6 +73,30 @@ async def main():
     await icond.run()
 
 
+def log_level_map() -> dict[str, int]:
+    """ Get mapping between log level name and numeric level """
+    # Also see cmd_daemon.py:log_level_list
+    return dict(
+        map(lambda t: (t[1].lower(), t[0]),   # Lower and swap order
+            filter(lambda t: not t[1].startswith('Level'),  # Remove "dummy" levels
+                   enumerate(map(logging.getLevelName, range(100))))))
+
+
+def init_logging(level: int, debug: bool):
+    """ Initialize logging """
+    if debug:
+        level = logging.DEBUG
+    log_handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log_handler.setFormatter(formatter)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    root_logger.addHandler(log_handler)
+    if debug:
+        log.debug('Setting additional debug settings')
+        logging.getLogger("asyncio").setLevel(logging.DEBUG)
+
+
 def start(params : argparse.Namespace):
     """ Entry point for module run """
     if not (params.force or os.geteuid() == 0):
@@ -80,11 +104,7 @@ def start(params : argparse.Namespace):
         print("Try --force if you are confident it will work")
         sys.exit(-1)
     setproctitle('ipo_server')
-    log_handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    log_handler.setFormatter(formatter)
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-    root_logger.addHandler(log_handler)
-    logging.getLogger("asyncio").setLevel(logging.DEBUG)
+    log_level = logging.WARNING if not params.log else log_level_map()[params.log.lower()]
+    init_logging(log_level, params.debug)
+
     asyncio.run(main())
