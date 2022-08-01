@@ -145,6 +145,10 @@ class StatsRunner:
         await self._stop_daemons()  # Make sure there isn't an old daemon running
         self.primary_ipo, self.secondary_ipo = await asyncio.gather(*[self._start_daemon(conn) for conn in self.servers])
 
+        # Make sure that seconday is with us
+        log.debug('Bootstrap secondary daemon')
+        result = await self.secondary_connection.run(f'{self.IPO_PATH} daemon bootstrap {self.PRIMARY_IPO} 1337')
+        log.debug(result)
         # Slight race here
         while True:
             result = await self.primary_connection.run(f'{self.IPO_PATH} container run iconsrv -p 8080:8080 -e PORT=8080')
