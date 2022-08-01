@@ -82,11 +82,11 @@ def log_level_map() -> dict[str, int]:
                    enumerate(map(logging.getLevelName, range(100))))))
 
 
-def init_logging(level: int, debug: bool):
+def init_logging(level: int, debug: bool, logfile=sys.stdout):
     """ Initialize logging """
     if debug:
         level = logging.DEBUG
-    log_handler = logging.StreamHandler(sys.stdout)
+    log_handler = logging.StreamHandler(logfile)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     log_handler.setFormatter(formatter)
     root_logger = logging.getLogger()
@@ -105,6 +105,7 @@ def start(params : argparse.Namespace):
         sys.exit(-1)
     setproctitle('ipo_server')
     log_level = logging.WARNING if not params.log else log_level_map()[params.log.lower()]
-    init_logging(log_level, params.debug)
+    log_file = sys.stdout if not params.logfile else params.logfile
+    init_logging(log_level, params.debug, logfile=log_file)
 
     asyncio.run(main())
