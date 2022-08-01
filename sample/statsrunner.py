@@ -91,7 +91,8 @@ class StatsRunner:
 
     async def _start_daemon(self, conn: SSHServer) -> asyncssh.SSHClientProcess:
         while True:
-            proc = await conn.create_process(f'{self.IPO_PATH} daemon start', stdin = None, stdout = None, stderr = None)
+            proc = await conn.create_process(f'{self.IPO_PATH} daemon start --log=error --logfile=daemon.log',
+                                             stdin=None, stdout=None, stderr=None)
             # Startup assurance.. should probably parse daemon log output
             # but than I'm stuck with that pipe that needs reading..
             for _tnum in range(2):
