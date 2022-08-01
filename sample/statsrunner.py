@@ -151,9 +151,11 @@ class StatsRunner:
         log.debug(result)
         # Slight race here
         while True:
+            log.debug('Trying to start container...')
             result = await self.primary_connection.run(f'{self.IPO_PATH} container run iconsrv -p 8080:8080 -e PORT=8080')
             if 'Error' not in result.stdout:
                 break
+            log.debug(result.stdout)
 
         # Just give them time to init
         await asyncio.sleep(5)
