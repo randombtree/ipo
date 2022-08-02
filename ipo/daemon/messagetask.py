@@ -355,7 +355,8 @@ class MessageTaskDispatcher:
         # Some operations can take quite a while to finish in task handlers
         # so we really don't want to start canceling stuff that might lead to
         # really weird mid-states.
-        log.debug('Waiting for tasks to finish', exc_info = (exc_type, exc_value, traceback))
+        exc_info = (exc_type, exc_value, traceback) if exc_type is not None else None
+        log.debug('Waiting for tasks to finish', exc_info=exc_info)
         if self.msg_tasks:
             await asyncio.wait(map(lambda t: t.asynctask, self.msg_tasks))
         suppress_exc = False
