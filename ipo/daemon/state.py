@@ -57,10 +57,16 @@ class Icond:
         """ Run the sub-modules of the daemon """
         runner = AsyncTaskRunner()
         await self.router.start()
-        runner.run(self.ctrl.run())
+        ctrl_task = runner.run(self.ctrl.run())
         shutdown_task = runner.run(self._shutdown_waiter())
         cmgr_task = runner.run(lambda: self.cmgr.start())
         orch_task = runner.run(self.orchestrator.run())
+        # For debug purposes when something fails
+        task_map = {
+            ctrl_task: 'Controller service',
+            cmgr_task: 'Container manager service',
+            orch_task: 'Orchestrator manager service'
+        }
 
         try:
             async for task in runner:
@@ -68,7 +74,9 @@ class Icond:
                 if shutdown_task == task:
                     log.info('Shutdown signaled. Quitting..')
                     break
-                log.error('Unexpected exit of task %s. Quitting!', task)
+                log.error('Unexpected exit of task %s (%s). Quitting!',
+                          task,
+                          task_map[task] if task in task_map else 'Unknown?')
                 self.do_shutdown()
         finally:
             runner.clear()
