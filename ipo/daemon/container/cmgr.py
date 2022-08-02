@@ -35,7 +35,6 @@ class ContainerManager:
     deployments: dict[str, ContainerCoordinator]
     tasks: dict[AsyncTask, ContainerCoordinator]
     icond: Icond
-    task: Union[None, asyncio.Task]
     inqueue: asyncio.Queue     # Command queue
     task_runner: AsyncTaskRunner
 
@@ -48,21 +47,16 @@ class ContainerManager:
         self.tasks = {}
         self.inqueue = asyncio.Queue()
         self.task_runner = AsyncTaskRunner()
-        self.task = None
 
-    def start(self) -> asyncio.Task:
-        """
-        Start the container manager service.
-        """
-        assert self.task is None
-        self.icond.eventqueue.listen(ShutdownEvent, self.inqueue)
-        self.task = asyncio.create_task(self._run())
-        return self.task
+    async def _shutdown_waiter(self):
+        with self.icond.subscribe_event(ShutdownEvent) as shutdown_event:
+            await shutdown_event.get()
 
-    async def _run(self):
+    async def run(self):
         """
         Container manager service main loop
         """
+        shutdown_task = self.task_runner.run(self._shutdown_waiter())
         # TODO: Re-intergrate running containers to ipo. Now just shut them down.
         running_containers = await self.icond.docker.containers.list()
         for container in running_containers:
@@ -80,6 +74,8 @@ class ContainerManager:
                 if isinstance(result, ShutdownEvent):
                     log.info('Shutdown event received')
                     break
+            elif task == shutdown_task:
+                break
             elif task in self.tasks:
                 # A coordinator quit
                 coordinator = self.tasks[task]
@@ -96,8 +92,6 @@ class ContainerManager:
                     del self.deployments[coordinator.info.image.full_name]
 
                 del self.tasks[task]
-            if self.icond.shutdown:
-                break
 
         # TODO: We currently shut down ICONs but this wouldn't strictly necessary - only
         #       some more code to bring back the state of already running when re-starting

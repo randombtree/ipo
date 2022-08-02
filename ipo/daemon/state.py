@@ -59,7 +59,7 @@ class Icond:
         await self.router.start()
         ctrl_task = runner.run(self.ctrl.run())
         shutdown_task = runner.run(self._shutdown_waiter())
-        cmgr_task = runner.run(lambda: self.cmgr.start())
+        cmgr_task = runner.run(self.cmgr.run())
         orch_task = runner.run(self.orchestrator.run())
         # For debug purposes when something fails
         task_map = {
