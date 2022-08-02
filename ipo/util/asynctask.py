@@ -120,6 +120,9 @@ class AsyncTask:
         if self.is_running():
             self._asynctask.cancel()
 
+    def __str__(self):
+        return f'<AsyncTask: ({self.fctry}, {self._asynctask})>'
+
 
 class AsyncTaskRunner:
     """
