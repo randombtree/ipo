@@ -187,6 +187,7 @@ class OrchestratorManager:
 
     async def run(self):
         """ Run orchestrator manager """
+        log.debug('Orchestrator manager started')
         self.runner.run(self._run_server())
         shutdown_task = self.runner.run(self._shutdown_waiter())
 
