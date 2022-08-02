@@ -5,14 +5,14 @@ import socket
 import time
 import logging
 import asyncio
-from asyncio import Queue, Task
+from asyncio import Queue
 
 from weakref import WeakValueDictionary
 
 from typing import cast, Optional, Union
 
+from .. state import Icond
 from ... util.asynctask import AsyncTaskRunner
-from .. events import ShutdownEvent
 
 from . dht import IPOKademliaServer
 from . traceroute import Traceroute, HopMetric, Hop
@@ -146,7 +146,6 @@ class RouteManager:
     edge_routers: set[Router]
     routers: WeakValueDictionary[bytes, Router]
     cmd_queue: Queue
-    task: Task
 
     def __init__(self, config: DaemonConfig):
         self.config = config
@@ -156,21 +155,6 @@ class RouteManager:
         self.edge_routers = set()
         self.routers = WeakValueDictionary()
         self.cmd_queue = Queue()
-
-    async def start(self):
-        """ Start controller """
-        self.traceroute.start()
-        # DHT uses UDP, so use the same port number as the orchestrator
-        await self.dht.listen(int(self.config.port))
-        self.task = asyncio.create_task(self._run())
-
-    async def stop(self):
-        """ Stop controller """
-        if self.task is not None:
-            await self.cmd_queue.put(ShutdownEvent())
-        self.dht.save_state()
-        self.traceroute.stop()
-        await self.task
 
     def get_current_ip(self):
         """ Returns node active IP address """
@@ -399,9 +383,14 @@ class RouteManager:
             del best_metrics[our_ip]
         return list(sorted(best_metrics.values(), key = lambda metric: metric.rtt))
 
-    async def _run(self):
+    async def run(self):
         log.debug('Starting manager')
+        # DHT uses UDP, so use the same port number as the orchestrator
+        await self.dht.listen(int(self.config.port))
+        self.traceroute.start()
+
         runner = AsyncTaskRunner()
+        shutdown_task = runner.run(Icond.instance().shutdown_waiter())
         refresh_task = runner.run(self._refresh_routes())
         command_task = runner.run(self.cmd_queue.get)
 
@@ -417,11 +406,10 @@ class RouteManager:
             if task == command_task:
                 # We currently only take routes to scan
                 cmd = task.result()
-                if isinstance(cmd, ShutdownEvent):
-                    break
                 if isinstance(cmd, bytes):
                     log.debug('jere')
                     await self._probe_route(cmd)
+                    self.cmd_queue.task_done()
             elif task == refresh_task:
                 await self._refresh_routes()
             elif task == new_node_task:
@@ -433,5 +421,10 @@ class RouteManager:
                 log.error('Refresh task had an exception')
                 e = refresh_task.exception()
                 log.critical(e, exc_info = True)
+            elif task == shutdown_task:
+                break
+
+        self.dht.save_state()
+        self.traceroute.stop()
         runner.clear()
         log.debug('Stopping manager')

@@ -3,6 +3,7 @@ ICOND global state
 """
 import asyncio
 import socket
+import errno
 import logging
 from typing import Optional
 
@@ -12,7 +13,6 @@ from . asyncdocker import AsyncDockerClient
 from . events import ShutdownEvent
 from . eventqueue import EventQueue, Subscription
 from . config import DaemonConfig
-from . routing import RouteManager
 
 log = logging.getLogger(__name__)
 
@@ -24,13 +24,13 @@ class Icond:
     shutdown: bool
     eventqueue: EventQueue
     config: DaemonConfig
-    router: RouteManager
 
     def __init__(self):
         # Work around circular deps
         from . import container  # pylint: disable=import-outside-toplevel
         from . import control    # pylint: disable=import-outside-toplevel
         from . import orchestrator  # pylint: disable=import-outside-toplevel
+        from . routing import RouteManager  # pylint: disable=import-outside-toplevel
 
         self.docker = AsyncDockerClient(base_url='unix://var/run/docker.sock')
         self.shutdown = False
@@ -57,13 +57,15 @@ class Icond:
     async def run(self):
         """ Run the sub-modules of the daemon """
         runner = AsyncTaskRunner()
-        await self.router.start()
+
+        router_task = runner.run(self.router.run())
         ctrl_task = runner.run(self.ctrl.run())
         shutdown_task = runner.run(self.shutdown_waiter())
         cmgr_task = runner.run(self.cmgr.run())
         orch_task = runner.run(self.orchestrator.run())
         # For debug purposes when something fails
         task_map = {
+            router_task: 'Router service',
             ctrl_task: 'Controller service',
             cmgr_task: 'Container manager service',
             orch_task: 'Orchestrator manager service'
@@ -74,10 +76,9 @@ class Icond:
                 _r = task.result()
                 if shutdown_task == task:
                     log.info('Shutdown signaled. Quitting..')
-                    await self.router.stop()
                     log.info('Waiting for tasks to shut down...')
                     await asyncio.wait({cmgr_task.asynctask,
-                                        self.router.task,
+                                        router_task.asynctask,
                                         orch_task.asynctask,
                                         })
                     break
@@ -86,6 +87,14 @@ class Icond:
                               task,
                               task_map[task] if task in task_map else 'Unknown?')
                     self.do_shutdown()
+            except OSError as e:
+                # Hmm.. bind earlier to avoid this soup?
+                if e.errno == errno.EADDRINUSE:
+                    log.error('Couldn\'t bind to address: %s', e)
+                    self.do_shutdown()
+                    continue
+                log.critical('Exception in service', exc_info=True)
+                raise e
             except Exception as e:
                 log.critical('Exception in service', exc_info=True)
                 raise e
