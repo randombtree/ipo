@@ -108,6 +108,7 @@ class Container(Emitter):
 
     async def stop(self):
         """ Stop container """
+        log.debug('%s: stop', self)
         # FIXME: We don't distinguish between them here, perhaps we should?
         if self.is_running():
             await self.inqueue.put(ShutdownEvent)
@@ -352,6 +353,7 @@ class Container(Emitter):
         # (The container yard management sw should prune stale containers regularly)
         await container.stop()
         await self.emit_state(ContainerState.STOPPED)
+        log.debug('%s: stopped', self)
 
     def __str__(self):
         return f'<Container {self.container_name} for {self.deployment.image}>'
