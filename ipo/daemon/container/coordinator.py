@@ -3,6 +3,7 @@ Container coordinators.
 
 Glue between remote and local containers.
 """
+import asyncio
 from asyncio import Queue
 import logging
 from abc import ABCMeta
@@ -34,14 +35,12 @@ log = logging.getLogger(__name__)
 class ContainerCoordinator(DeploymentCoordinator, Emitter, metaclass = ABCMeta):
     """ Container Deployment glue """
     info: DeploymentInfo
-    runner: AsyncTaskRunner
     inqueue: Queue
     container: Container
     deployments: dict[Hostaddr, RemoteDeployment]
 
     def __init__(self, info: DeploymentInfo):
         self.info = info
-        self.runner = AsyncTaskRunner()
         self.inqueue = Queue()
         self.container = Container(self.info, self)
         self.container.StateChanged.connect(self.inqueue)
@@ -56,6 +55,7 @@ class ContainerCoordinator(DeploymentCoordinator, Emitter, metaclass = ABCMeta):
         """ Stop the coordinator """
         if self.container is not None and self.container.is_running():
             await self.inqueue.put(ShutdownEvent)
+            log.debug('%s: Waiting to quit', self)
             await self.inqueue.join()
 
     async def run(self):
@@ -64,36 +64,57 @@ class ContainerCoordinator(DeploymentCoordinator, Emitter, metaclass = ABCMeta):
 
         Returns if ordered to quit or with exception if container coudln't be instantiated
         """
-        container_task = self.runner.run(self.container.run())
-        command_task = self.runner.run(self.inqueue.get)
+        log.debug('%s: Started', self)
+        runner = AsyncTaskRunner()
+        container_task = runner.run(self.container.run())
+        command_task = runner.run(self.inqueue.get)
+        timeout_task = None
         pending_shutdown = False  # For waiting gracefully for shutdown
-        async for task in self.runner:
+        async for task in runner:
             if command_task == task:
                 result = task.result()
 
-                if isinstance(result, ShutdownEvent):
+                if result is ShutdownEvent:
                     # From stop()
+                    log.debug('%s: Got shutdown event', self)
                     pending_shutdown = True
-                    await self.container.stop()
+                    if self.container is not None and self.container.is_running():
+                        await self.container.stop()
+                    else:
+                        # Nothing to be done anyway..
+                        break
                     # TODO: Add timeout task if container refuses to shut down
                 elif isinstance(result, Event):
                     # Container signal
                     event = result
                     if event.signal == self.container.StateChanged:
-                        log.debug('Container state change %s', event)
+                        log.debug('%s: Container state change %s', self, event)
                         # TODO: Need to do anything?
+                    self.inqueue.task_done()
                 else:
                     self.handle_command(result)
+                    self.inqueue.task_done()
             elif container_task == task:
+                exception = task.exception()
+                if exception:
+                    log.error('%s: Container shut down with exception: %s',
+                              self, exception)
+                else:
+                    _r = task.result()
                 if pending_shutdown:
                     log.info('%s shut down successfully', self.container)
-                    self.inqueue.task_done()  # Wake up .stop() waiting in join()
+                    timeout_task = runner.run(asyncio.sleep(0))
                 else:
                     log.warning('%s shut down unexpectedly', self.container)
                     # TODO: Notify etc.
+            elif timeout_task == task:
+                # Currently only used to "flush" the task queue on quit
                 break
             else:
                 await self.handle_task(task)
+        log.debug('%s: Coordinator has quit', self)
+        # Wake up stop()
+        self.inqueue.task_done()
 
     def __str__(self):
         return f'<Coordinator {self.container}>'
