@@ -99,13 +99,21 @@ class ContainerManager:
         waitfor: list[ContainerCoordinator] = []
         for task, coordinator in self.tasks.items():
             if coordinator.container.is_running():
+                log.debug('Shutting down coordinator %s', coordinator)
                 await coordinator.stop()
                 waitfor.append(task.asynctask)
 
         self.task_runner.clear()
         # Just extra paranoia that all tasks really have quit when going forward
         if len(waitfor) > 0:
-            await asyncio.wait(waitfor)
+            log.debug('Waiting for %d tasks...', len(waitfor))
+            done, _pending = await asyncio.wait(waitfor)
+            for task in done:
+                e = task.exception()
+                if e is not None:
+                    log.warning('%s exited with exception: %s', task, e)
+                elif task.cancelled():
+                    log.warning('%s was cancelled')
         log.info('Containers shut-down..')
 
     async def _start_coordinator(self, coordinator_cls: type[CoordinatorType], image_name: str, ports: dict[str, Optional[int]], environment: dict[str, str], foreign_prefix: str = "") -> CoordinatorType:
