@@ -49,7 +49,8 @@ class Icond:
             raise Exception('Icond hasn\'t been initialized?')
         return cls._instance
 
-    async def _shutdown_waiter(self):
+    async def shutdown_waiter(self):
+        """ Helper: Quits (returns) on shutdown event """
         with self.subscribe_event(ShutdownEvent) as shutdown_event:
             await shutdown_event.get()
 
@@ -58,7 +59,7 @@ class Icond:
         runner = AsyncTaskRunner()
         await self.router.start()
         ctrl_task = runner.run(self.ctrl.run())
-        shutdown_task = runner.run(self._shutdown_waiter())
+        shutdown_task = runner.run(self.shutdown_waiter())
         cmgr_task = runner.run(self.cmgr.run())
         orch_task = runner.run(self.orchestrator.run())
         # For debug purposes when something fails
