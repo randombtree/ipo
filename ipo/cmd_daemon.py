@@ -143,7 +143,7 @@ def add_subcommand(subparser: argparsehelper.AddParser):
     start.add_argument('--force', default = False, action = 'store_true')   # Force starting, omitting checks..
     start.add_argument('--log', '-l', choices = log_level_list(),
                        help = 'Change log level')
-    start.add_argument('--logfile', type=argparse.FileType('w'),
+    start.add_argument('--logfile', type=argparse.FileType('a'),
                        help='Log to file')
     start.add_argument('--debug', action = 'store_true',
                        help = 'Set debugging mode on; overrides log level setting!')
