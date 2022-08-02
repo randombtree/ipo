@@ -68,29 +68,34 @@ class Icond:
             orch_task: 'Orchestrator manager service'
         }
 
-        try:
-            async for task in runner:
+        async for task in runner:
+            try:
                 _r = task.result()
                 if shutdown_task == task:
                     log.info('Shutdown signaled. Quitting..')
+                    await self.router.stop()
+                    log.info('Waiting for tasks to shut down...')
+                    await asyncio.wait({cmgr_task.asynctask,
+                                        self.router.task,
+                                        orch_task.asynctask,
+                                        })
                     break
-                log.error('Unexpected exit of task %s (%s). Quitting!',
-                          task,
-                          task_map[task] if task in task_map else 'Unknown?')
-                self.do_shutdown()
-        finally:
-            runner.clear()
-            await self.router.stop()
-            log.info('Waiting for tasks to shut down...')
-            await asyncio.wait({cmgr_task.asynctask,
-                                self.router.task,
-                                orch_task.asynctask,
-                                })
-            # Also, leaving docker session open will spew warnings
-            await self.docker.close()
+                if not self.shutdown:
+                    log.error('Unexpected exit of task %s (%s). Quitting!',
+                              task,
+                              task_map[task] if task in task_map else 'Unknown?')
+                    self.do_shutdown()
+            except Exception as e:
+                log.critical('Exception in service', exc_info=True)
+                raise e
+
+        runner.clear()
+        # Also, leaving docker session open will spew warnings
+        await self.docker.close()
 
     def do_shutdown(self):
         """ Shutdown daemon commanded """
+        log.debug('Shutdown called')
         self.shutdown = True
         self.eventqueue.publish(ShutdownEvent())
 
