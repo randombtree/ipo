@@ -71,6 +71,7 @@ async def main():
     log.info('Starting server')
     set_signal_handlers(icond)
     await icond.run()
+    log.info('Server stopped')
 
 
 def log_level_map() -> dict[str, int]:
