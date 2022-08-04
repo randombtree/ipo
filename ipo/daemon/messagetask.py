@@ -356,7 +356,8 @@ class MessageTaskDispatcher:
         # so we really don't want to start canceling stuff that might lead to
         # really weird mid-states.
         exc_info = (exc_type, exc_value, traceback) if exc_type is not None else None
-        log.debug('Waiting for tasks to finish', exc_info=exc_info)
+        log.debug('Waiting for tasks to finish',
+                  exc_info=exc_info if exc_type != ConnectionClosedException else None)
         if self.msg_tasks:
             await asyncio.wait(map(lambda t: t.asynctask, self.msg_tasks))
         suppress_exc = False
