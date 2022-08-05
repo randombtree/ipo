@@ -313,7 +313,7 @@ class RouteManager:
 
     async def find_orchestrators(self, address: str) -> list[DistanceMetric]:
         """ Find orchestrators closest to ip """
-
+        log.debug('Find orchestrator for %s', address)
         if self.dht.get_current_ip() is None:
             log.error('Cannot find orchestrators: DHT is not initialized yet')
             return []
@@ -328,6 +328,9 @@ class RouteManager:
         last_count = len(hops)
         if cast(HopMetric, hops[-1]).ip == ip:
             hops.pop()
+            # Keep the tail None-free
+            while not hops[-1]:
+                hops.pop()
         # Make sure that the current network view is updated for a fair
         # comparison of orchestrators
         await self._update_routes(hops)
@@ -337,6 +340,7 @@ class RouteManager:
         del hops
         if len(last_hops) < 1:
             return []
+        log.debug('Gather metrics for %d hops', len(last_hops))
         results = await asyncio.gather(*list(map(lambda r: self.dht.get_metrics(r.ip), last_hops)))
         best_metrics: dict[bytes, DistanceMetric] = {}
         for ndx, (hop, result) in enumerate(zip(last_hops, results)):
