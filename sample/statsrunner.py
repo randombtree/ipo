@@ -16,6 +16,9 @@ import collections
 import time
 import logging
 import asyncio
+import getopt
+import subprocess
+import socket
 from asyncio import Queue
 
 from typing import Mapping, Optional, Union
@@ -28,6 +31,8 @@ from scipy.stats import kstest  # type: ignore
 
 
 log = logging.getLogger(__name__)
+
+EXTRA_DEBUG = False   # Do some extra debugging that might worsen stats
 
 
 class SSHServer:
@@ -61,6 +66,25 @@ class SSHServer:
         await self.connection.wait_closed()
 
 
+def get_ipaddress() -> str:
+    """
+    Simple hacky way to get our host IP address.
+    - Assumes only one IP address on host!
+    - Throws othervise; you should anyhow run stats in some kind
+      of virtual environment..
+    """
+    # There is no beautiful stock python way currently (apart from using
+    # external modules, e.g. netifaces).
+    ips = subprocess.check_output(['hostname', '--all-ip-addresses'])\
+                    .decode()\
+                    .strip()\
+                    .split(' ')
+    if len(ips) == 1:
+        return ips[0]
+    # You broke it - you get to keep the pieces :)
+    raise Exception('I don\'t currently deal with hosts that have multiple IPs')
+
+
 class StatsRunner:
     """ Basic runner for collecting client stats """
     STATSOUT_RE = re.compile(r'^(?P<name>\w+): \[(?P<list>.*)\]$')  # Parse stats from client
@@ -79,6 +103,10 @@ class StatsRunner:
 
     servers: list[SSHServer]
 
+    ip_address: str   # Our ipaddress
+    primary_ip: str
+    secondary_ip: str
+
     def __init__(self, runs: int, path: str, host: str, **kwargs):
         self.runs = runs
         self.path = path
@@ -88,49 +116,70 @@ class StatsRunner:
         self.servers = []
         self.primary_ipo = None
         self.secondary_ipo = None
+        # Resolve IPs
+        self.ip_address = get_ipaddress()   # Throws if run on multi-address host
+        self.primary_ip = socket.gethostbyname(self.PRIMARY_IPO)
+        self.secondary_ip = socket.gethostbyname(self.SECONDARY_IPO)
 
     async def _start_daemon(self, conn: SSHServer) -> asyncssh.SSHClientProcess:
         while True:
-            proc = await conn.create_process(f'{self.IPO_PATH} daemon start --log=error --logfile=daemon.log',
-                                             stdin=None, stdout=None, stderr=None)
+            # When things go sour, at least have a possibility of some logging
+            # This is however not good for stats..
+            log_level = 'debug' if EXTRA_DEBUG else 'error'
+            proc = await conn.create_process(
+                f'{self.IPO_PATH} daemon start --log={log_level} --logfile=daemon.log',
+                stdin=None, stdout=None, stderr=None)
             # Startup assurance.. should probably parse daemon log output
             # but than I'm stuck with that pipe that needs reading..
-            for _tnum in range(2):
+            for try_num in range(1, 3):
                 result = await conn.run(f'{self.IPO_PATH} container ls')
                 if result.returncode == 0 and 'refused' not in result.stdout:
                     return proc
                 try:
-                    await proc.wait(timeout = 1)
+                    await proc.wait(timeout=1)
+                    log.debug('Daemon start failed (try %d)', try_num)
                     break  # Proc exited
                 except asyncssh.process.TimeoutError:
                     # Check a few moar times
                     ...
             # Need to try again
-            proc.terminate()
-            for i in range(3):
-                try:
-                    await proc.wait(timeout = 2)
-                    break
-                except asyncssh.process.TimeoutError:
-                    if i == 0:
-                        proc.kill()
-                    elif i == 1:
-                        proc.send_signal(9)
-                    else:
-                        # Of some inexplicable reason this happens on VM2?
-                        await conn.run('killall ipo_server')
-            proc.close()
+            log.debug('Daemon hung, going the kill route')
+            await self._stop_daemon(conn, proc)
 
     async def _stop_daemon(self, conn: SSHServer, proc: Optional[asyncssh.SSHClientProcess]):
+        stop_count = 0
+        await conn.run(f'{self.IPO_PATH} daemon stop')
+        if proc is not None:
+            log.debug('Waiting for daemon to exit..')
+            try:
+                await proc.wait(timeout=5)
+                proc.close()
+                return
+            except asyncssh.process.TimeoutError:
+                log.error('Daemon didn\'t stop gracefully?')
+                # Let the forceful methods take over
+
         while True:
-            # This can be repeatedly triggered, acts as a delay if nothing else :)
-            await conn.run(f'{self.IPO_PATH} daemon stop')
-            # Wait for port to free up
+            # Check for port
             result = await conn.run('netstat --tcp -nlp')
             if 'ipo_server' not in result.stdout:
-                break
+                # Additional sanity checks to make sure the server is wholly
+                # out of the game
+                result = await conn.run('pidof -q ipo_server')
+                # a pid resides?
+                if result.exit_status != 0:
+                    # No, now we should be safe :)
+                    break
+            stop_count += 1
+            # Try harder to kill daemon
+            if 3 <= stop_count <= 6:
+                log.debug('Killing server..')
+                await conn.run('killall ipo_server')
+            elif stop_count > 6:
+                log.debug('Nuking server..')
+                await conn.run('killall -9 ipo_server')
+
         if proc is not None:
-            await proc.wait()
             proc.close()
 
     async def _stop_daemons(self):
@@ -156,9 +205,23 @@ class StatsRunner:
             if 'Error' not in result.stdout:
                 break
             log.debug(result.stdout)
+        # Secondary should have time to init, but who knows?
+        await self.wait_for_startup()
 
-        # Just give them time to init
-        await asyncio.sleep(5)
+    async def wait_for_startup(self):
+        """ Ensure that the secondary IPO is connected properly to DHT """
+        log.debug('Waiting for secondary to connect to DHT..')
+        while True:
+            result = await self.secondary_connection.run(f'{self.IPO_PATH} daemon find {self.primary_ip}')
+            # The primary IP should be in the results if DHT is up
+            if self.primary_ip in result.stdout:
+                break
+        log.debug('Sanity checking primary IPO...')
+        while True:
+            result = await self.primary_connection.run(f'{self.IPO_PATH} daemon find {self.ip_address}')
+            # The secondary IP should be in the results if everything is wired up
+            if self.secondary_ip in result.stdout:
+                break
 
     async def tear_down(self):
         """ Teardown after all runs """
@@ -228,7 +291,8 @@ class HotStatsRunner(StatsRunner):
         # NB: First run goes with the daemon started in set_up
         if not self.secondary_ipo:
             self.secondary_ipo = await self._start_daemon(self.secondary_connection)
-        await asyncio.sleep(5)  # Avoid races
+        # Make sure that secondary IPO is connected the DHT as well
+        await self.wait_for_startup()
 
     async def after_run(self):
         """ Stop secondary daemon, to be restarted before next run (to purge ICON) """
@@ -241,6 +305,7 @@ def convert_data(data: Union[str, bytes]) -> str:
     if isinstance(data, str):
         return data
     return data.decode()
+
 
 class ColdStatsRunner(HotStatsRunner):
     """
@@ -296,7 +361,7 @@ RUNNERS = {
 
 def setup_logging():
     """ Init & configure logger """
-    log_handler = logging.StreamHandler(sys.stdout)
+    log_handler = logging.StreamHandler(open('statsrunner.log', mode='a'))
     formatter = logging.Formatter('%(asctime)s %(levelname)s - %(pathname)s:%(lineno)3d - %(name)s->%(funcName)s - %(message)s')
     log_handler.setFormatter(formatter)
     root_logger = logging.getLogger()
@@ -304,17 +369,45 @@ def setup_logging():
     root_logger.addHandler(log_handler)
 
 
+def show_help(args):
+    print(f"""\
+{args[0]}: -d [host:port] [output] [runs] [direct|hot|cold]
+-d \t Extra debug mode - don't do stats with this on.
+-h \t Help\
+""")
+
+
 def main(args):
     """ Main method """
+    global EXTRA_DEBUG
 
     try:
-        host = args[1]
-        stats_file = args[2]
-        num_runs = int(args[3])
-        test_cls = RUNNERS[args[4]]
-    except (IndexError, NameError, KeyError):
-        print(f'{args[0]}: <host> <savefile> <runs> <test:direct,hot,cold>')
-        return
+        opts = getopt.getopt(args[1:], 'dh')
+    except getopt.GetoptError as e:
+        print(e, file=sys.stderr)
+        show_help(args)
+        return 1
+    restargs = opts[1]
+    if len(restargs) != 4:
+        show_help(args)
+        return 1
+
+    for o, _a in opts[0]:
+        if o == '-d':
+            log.info('Extra debug enabled - don\'t use for stats')
+            EXTRA_DEBUG = True
+        elif o == '-h':
+            show_help(args)
+            return 0
+
+    try:
+        host = restargs[0]
+        stats_file = restargs[1]
+        num_runs = int(restargs[2])
+        test_cls = RUNNERS[restargs[3]]
+    except (IndexError, NameError, KeyError, ValueError):
+        show_help(args)
+        return 1
 
     df: pd.DataFrame
     #stats: dict[str, list[int]]
@@ -326,7 +419,9 @@ def main(args):
         setup_logging()
         path = os.path.dirname(args[0])
         runner = test_cls(num_runs, path, host)
+        log.info('Starting stats run...')
         stats = asyncio.run(runner.run())
+        log.info('Stats run completed!')
         df = pd.DataFrame(stats)
         df.to_csv(stats_file)
 
@@ -342,4 +437,6 @@ def main(args):
 
 
 if __name__ == '__main__':
-    main(sys.argv)
+    ret = main(sys.argv)
+    if ret is not None:
+        sys.exit(ret)
