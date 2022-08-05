@@ -11,7 +11,7 @@ import functools
 from threading import Thread, Lock
 import asyncio
 from asyncio import Queue as AsyncQueue
-from collections import namedtuple, OrderedDict
+from collections import namedtuple, OrderedDict, defaultdict
 import logging
 
 from typing import Union, cast, Optional
@@ -52,6 +52,8 @@ MAX_PARALLEL_PROBES = 10  # Send max this many packets towards host (with differ
 MAX_MISSES = 3            # After this many timeouts in a row, conclude that we have reached the end
 MAX_SOCKETS = int(resource.getrlimit(resource.RLIMIT_NOFILE)[0] / 4)
 MAX_RTT = 1.500           # Wait this long for reply from router
+MAX_PROBE_BURST = 5       # How many probes to send in one "burst"
+PROBES_PER_HOP = 3        # How many probes to send per hop (not implemented ATM)
 
 HopMetric = namedtuple('HopMetric', 'ip rtt')  # NB: IP is network BO.
 Hop = Optional[HopMetric]
@@ -64,9 +66,15 @@ class TimeCache:
     def __init__(self):
         self.time = float(0)
 
-    def set(self, time: float):
+    def stamp(self) -> float:
+        """ Store a timestamp and return it """
+        self.time = time.monotonic()
+        return self.time
+
+    def set(self, t: float) -> float:
         """ Set time """
-        self.time = time
+        self.time = t
+        return time
 
     def get(self) -> float:
         """ Get cached time """
@@ -130,7 +138,9 @@ class TraceTask:
                     if isinstance(val, HopMetric) and val.ip == self.target:
                         break
                     if isinstance(val, float):
-                        log.debug('%s: Still waiting for TTL %d', self.hostaddr, ndx + 1)
+                        log.debug('%s: Still waiting for TTL %d',
+                                  self.hostaddr,
+                                  ndx + 1)
                         return
         elif not onTimeout:
             # E.g. reached destination, apply a timeout if there are abstaining probes
@@ -153,30 +163,16 @@ class TraceTask:
                           self.hostaddr, cooldown_time)
                 self.finished = cooldown
                 return
-        log.debug('Finished probe to %s, waking up waiter', self.hostaddr)
+
+        self.force_finish()
+
+    def force_finish(self):
+        """ This will wake up the waiter no mater what and finish the task """
+        if isinstance(self.finished, bool) and self.finished:
+            return
         self.finished = True
-        # cull the tail
-
-        class RemoveUnfinished:
-            """
-            Stateful filter. Filter Nones and floats until it encounters
-            some other data (essentially trims the list head).
-            """
-            end: bool
-
-            def __init__(self):
-                self.end = True
-
-            def __call__(self, i):
-                if self.end and (i is None or isinstance(i, float)):
-                    return False
-                self.end = False
-                return True
-        # There can also be unfinished hops waiting to time out (float:s),
-        # we time out them directly
-        trace = list(map(lambda item: None if isinstance(item, float) else item,
-                     filter(RemoveUnfinished(), reversed(self.traceroute))))
-        trace.reverse()
+        log.debug('Finished probe to %s, waking up waiter', self.hostaddr)
+        trace = self.traceroute
 
         # The target host can reply to several probes, so the end can contain a plenthora of
         # probe results. Trim the end
@@ -200,9 +196,34 @@ class TraceTask:
                 return True
 
         trace = list(filter(TrimTailFilter(self.target), trace))
-        self.traceroute = trace
+
+        # cull the tail (No need for None:s in the tail
+
+        class RemoveUnfinished:
+            """
+            Stateful filter. Filter Nones and floats until it encounters
+            some other data (essentially trims the list head).
+            """
+            end: bool
+
+            def __init__(self):
+                self.end = True
+
+            def __call__(self, i):
+                if self.end and (i is None or isinstance(i, float)):
+                    return False
+                self.end = False
+                return True
+        # There can also be unfinished hops waiting to time out (float:s),
+        # we time out them directly
+        trace = list(map(lambda item: None if isinstance(item, float) else item,
+                     filter(RemoveUnfinished(), reversed(trace))))
+        trace.reverse()
+
+        self.traceroute = trace.copy()
         # Wake up waiter
-        self.loop.call_soon_threadsafe(self.wakeup.put_nowait, trace)
+        asyncio.run_coroutine_threadsafe(self.wakeup.put(trace), self.loop)
+        log.debug('Trace task finished!')
 
     def __iter__(self):
         """
@@ -217,7 +238,7 @@ class TraceTask:
             self.traceroute.append(now)
             yield len(self.traceroute)
 
-    def __setitem__(self, ttl: int, ip: Optional[bytes]):
+    def __setitem__(self, ttl: int, result: Optional[tuple[bytes, float]]):
         """
         Set the ip of the hopnumber
         """
@@ -227,6 +248,8 @@ class TraceTask:
         # in which case new results are still accepted
         if isinstance(self.finished, bool) and self.finished:
             return
+        ip = None if not result else result[0]
+        rtt = None if not result else result[1]
         assert self.active > 0
         self.active -= 1
         assert isinstance(ttl, int)
@@ -254,18 +277,19 @@ class TraceTask:
                 # There is a cooldown waiting
                 self._finish()
         else:
-            rtt = self.time.get() - ts
-            self.traceroute[ndx] = HopMetric(ip = ip, rtt = rtt)
+            self.traceroute[ndx] = HopMetric(ip=ip, rtt=rtt)
             log.debug('RTT %f', rtt)
             # We reached the target
             # (or we are waiting for some remaining probes)
             if ip == self.target or isinstance(self.finished, float):
                 self._finish(onTimeout = False)
 
-
-    def is_finished(self):
+    def is_finished(self) -> bool:
         """ If this trace has reached it's destination """
-        return self.finished
+        if isinstance(self.finished, bool):
+            return self.finished
+        # Has the cooldown expired?
+        return self.finished < self.time.get()
 
 
 def first(d: dict):
@@ -293,7 +317,8 @@ def get_so_ee_offender(eerr: bytes) -> Optional[bytes]:
     return None
 
 
-ActiveProbe = namedtuple('ActiveProbe', 'task socket ttl timeout')
+QueuedProbe = namedtuple('QueuedProbe', 'task socket ttl')             # Probe waiting to be sent
+ActiveProbe = namedtuple('ActiveProbe', 'task socket ttl ts timeout')  # Probe that is sent
 
 
 class Traceroute(Thread):
@@ -334,12 +359,20 @@ class Traceroute(Thread):
         with self.mutex:
             self.waiting_tasks.add(task)
         self._wakeup()
-        return await task.wait()
+        # If we race with quit..
+        if not self.quit:
+            result = await task.wait()
+            log.debug('Got trace to %s', target)
+            return result
+        return []
 
     def stop(self):
         """ Stop controller """
         log.debug('Stop controller')
-        self.quit = True
+        # Just to be on the safe side, update quit inside mutex
+        # it _should_ guarantee that is gets flushed out..
+        with self.mutex:
+            self.quit = True
         self._wakeup()
 
     def _wakeup(self):
@@ -356,20 +389,25 @@ class Traceroute(Thread):
         # TODO: This method should be in a split up into a separate class
         allocated_sockets = {}   # type: dict[int, socket.socket]
         free_sockets = []        # type: list[socket.socket]
-        active  = OrderedDict()  # type: OrderedDict[int, ActiveProbe]
+        queued = {}              # type: dict[int, QueuedProbe]
+        active = OrderedDict()   # type: OrderedDict[int, ActiveProbe]
+        active_task = defaultdict(list)  # type: dict[TraceTask, list[int]]
         cooldown = []            # type: list[tuple[socket.socket, float]]
 
-        while not self.quit:
-            log.debug('Poll loop')
-            now = time.monotonic()
+        while True:
+            log.debug('** Pre-poll **')
             next_event = None   # type: Optional[float]
-            self.time.set(now)
+            now = self.time.stamp()  # type: float
 
             # Check for timed out probes
             timed_out_items = 0
             for (fd, probe) in active.items():
-                if probe.timeout <= now:
-                    log.debug('%s Timed out TTL %d', probe.task.hostaddr, probe.ttl)
+                # Tasks can finish "faster" also when probes go missing
+                # Clean up the proves a bit faster then
+                if probe.timeout <= now or probe.task.is_finished():
+                    log.debug('%s Timed out TTL %d',
+                              probe.task.hostaddr,
+                              probe.ttl)
                     # first_probe has timed out. Mark it.
                     probe.task[probe.ttl] = None
                     # Let the sock cool down in case 'really late' replies happen
@@ -378,6 +416,7 @@ class Traceroute(Thread):
                 else:
                     next_event = probe.timeout
                     break
+
             # Mutable iterators would be bueno! But now remove timed out items
             for _ in range(0, timed_out_items):
                 active.popitem(last = False)
@@ -398,6 +437,11 @@ class Traceroute(Thread):
             max_new_tasks = MAX_SOCKETS - len(active) - len(cooldown)
             # waiting_tasks is accessed from both threads
             with self.mutex:
+                # When quitting, first finish all tasks, and let the machinery clean up
+                if self.quit:
+                    for task in self.waiting_tasks:
+                        task.force_finish()
+
                 remove_tasks = []  # type: list[TraceTask]
 
                 for task in self.waiting_tasks:
@@ -418,37 +462,45 @@ class Traceroute(Thread):
                 for task in remove_tasks:
                     self.waiting_tasks.remove(task)
 
+                # Now we cleaned up the tasks
+                if self.quit:
+                    break
+
             # Aaand, outside the lock, can begin sending probes
             for (task, ttl) in new_probe_tasks:
                 sock = free_sockets.pop() if len(free_sockets) > 0 else create_socket()
                 fd = sock.fileno()
-                # New socket?
+
+                modify = epoll.modify
                 if fd not in allocated_sockets:
+                    # New socket
                     allocated_sockets[fd] = sock
-                    epoll.register(sock.fileno(),
-                                   select.EPOLLERR)
+                    modify = epoll.register
 
-                active[fd] = ActiveProbe(task = task, socket = sock, ttl = ttl, timeout = now + MAX_RTT)
-                log.debug('Sending probe to %s TTL %d', task.hostaddr, ttl)
-                sock.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
-                sock.sendto('IPO traceroute'.encode(), (task.hostaddr, TRACEROUTE_PORT))
+                modify(fd, select.EPOLLOUT | select.EPOLLERR)
 
-            if len(new_probe_tasks) and next_event is None:
-                next_event = now + MAX_RTT
+                queued[fd] = QueuedProbe(task=task,
+                                         socket=sock,
+                                         ttl=ttl)
 
             # And now wait for the errors pouring in
             epoll_timeout = (cast(float, next_event) - now) if next_event is not None else None
-            log.debug('Sleep in epoll, next timeout in %f seconds', -1 if epoll_timeout is None else epoll_timeout)
-            poll_results = epoll.poll(timeout = epoll_timeout)
-            now = time.monotonic()
-            self.time.set(now)
+            log.debug('Sleep in epoll, next timeout in %f seconds',
+                      -1 if epoll_timeout is None else epoll_timeout)
+            poll_results = epoll.poll(timeout=epoll_timeout)
+            now = self.time.stamp()
+
+            probe_burst_left = MAX_PROBE_BURST  # Only send one probe per round
 
             for (fd, events) in poll_results:
                 log.debug('Poll event fd: %d, events: %d', fd, events)
                 # Wakeup just resets the queue
                 if fd == self.wakeup_wait:
                     self._handle_wakeup()
-                elif events & select.EPOLLERR > 0:
+                    continue
+
+                # First handle the incoming messages
+                if events & select.EPOLLERR > 0:
                     # Always empty the err queue, even when the socket isn't active
                     sock = allocated_sockets[fd]
                     msg, aux, flags, saddr = sock.recvmsg(1500, 1500, socket.MSG_ERRQUEUE)
@@ -469,8 +521,8 @@ class Traceroute(Thread):
                     # In principle, there can be several aux messages,
                     # but not sure how it could happen..
                     for (cmsg_level, cmsg_type, cmsg_data) in aux:
-                        log.debug('%s: level %d, type %d',
-                                  addr, cmsg_level, cmsg_type)
+                        log.debug('%s: level %d, type %d, length=%d',
+                                  addr, cmsg_level, cmsg_type, len(cmsg_data))
                         if cmsg_level == 0 and cmsg_type == IP_RECVERR:
                             # Can this happen?
                             if len(cmsg_data) < SOCK_EXTENDED_ERR_STRUCT_SIZE:
@@ -496,19 +548,65 @@ class Traceroute(Thread):
                                     log.warning('%s Unhandled ICMP type: %d, code: %d',
                                                 addr, ee_type, ee_code)
                                     continue
-                                probe.task[probe.ttl] = err_src
+                                # Record hit
+                                # NB: Updating time stamp due to weird scheduling delays!
+                                now = self.time.stamp()
+                                probe.task[probe.ttl] = (err_src, now - probe.ts)
                                 del active[fd]  # Don't accept more ICMPs for this host/ttl
                                 # And allow re-use after a while
-                                cooldown.insert(0, (probe.socket, now + MAX_RTT))
+                                # Round cooldowns to 100ms granularity to avoid uneccesary wakeups
+                                cooldown.insert(0, (probe.socket,
+                                                    round(now + MAX_RTT, 1)))
                             else:
                                 log.warning('%s (src: %s) Not handling origin: %d, type: %d, code: %d',
                                             addr, socket.inet_ntoa(err_src), ee_origin, ee_type, ee_code)
                         else:
                             log.warning('Not handling error (%d, %d) from %s:%d',
                                         cmsg_level, cmsg_type, addr, port)
+                elif events & select.EPOLLOUT > 0:
+                    # This fd has been marked for sending a probe
+                    # Try to smooth out the sending pace by applying max bursts
+                    if not probe_burst_left:
+                        continue
+                    probe_burst_left -= 1
+                    # Now we may send the probe
+                    if fd not in queued:
+                        log.error('fd got EPOLLOUT but not in queue?; FIXING')
+                        epoll.modify(fd, select.EPOLLERR)
+                        continue
+                    qp = queued.pop(fd)
+                    log.debug('Sending probe to %s TTL %d',
+                              qp.task.hostaddr,
+                              qp.ttl)
+                    # Don't send more probes if finished
+                    if not qp.task.is_finished():
+                        qp.socket.setsockopt(socket.SOL_IP,
+                                             socket.IP_TTL,
+                                             qp.ttl)
+                        sent = qp.socket.sendto('IPO traceroute'.encode(),
+                                            (task.hostaddr, TRACEROUTE_PORT))
+                        if sent == 0:
+                            log.debug('Send queue full, retrying')
+                            queued[fd] = qp
+                            continue
+                    else:
+                        log.debug('Not sending for already finished probe task')
+                    epoll.modify(fd, select.EPOLLERR)
+                    # /else store it as active probe so it can time out..
+                    # Update timestamp here; there is some really interesting delays going
+                    # on when testing in a VM.
+                    now = self.time.stamp()
+                    active[fd] = ActiveProbe(task=qp.task,
+                                             socket=qp.socket,
+                                             ttl=qp.ttl,
+                                             ts=now,
+                                             timeout=now + MAX_RTT)
+                    # This could in principle happen when sendin lots of probes
+                    # EPOLLOUT isn't AFAIK a binding promise
                 else:
                     log.error('Unhandled event?')
         log.debug('Traceroute quitting')
+
         # Avoid those pesky resource warnings..
         for sock in allocated_sockets.values():
             sock.close()
