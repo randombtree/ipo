@@ -206,22 +206,42 @@ class StatsRunner:
                 break
             log.debug(result.stdout)
         # Secondary should have time to init, but who knows?
-        await self.wait_for_startup()
+        _success = await self.wait_for_startup()
+        # TODO: When things go sour?
 
-    async def wait_for_startup(self):
-        """ Ensure that the secondary IPO is connected properly to DHT """
+    async def wait_for_startup(self) -> bool:
+        """
+        Ensure that the secondary IPO is connected properly to DHT.
+        returns: False if checking timed out, and a restart might be required..
+        """
+        assert self.primary_connection
+        assert self.secondary_connection
+
         log.debug('Waiting for secondary to connect to DHT..')
-        while True:
+        ok = False
+        for _i in range(10):
             result = await self.secondary_connection.run(f'{self.IPO_PATH} daemon find {self.primary_ip}')
             # The primary IP should be in the results if DHT is up
             if self.primary_ip in result.stdout:
+                ok = True
                 break
+        if not ok:
+            log.error('Secondary IPO not ok..')
+            return False
         log.debug('Sanity checking primary IPO...')
-        while True:
+        ok = False
+        for _i in range(10):
             result = await self.primary_connection.run(f'{self.IPO_PATH} daemon find {self.ip_address}')
             # The secondary IP should be in the results if everything is wired up
             if self.secondary_ip in result.stdout:
+                ok = True
                 break
+
+        if not ok:
+            log.error('Primary IPO not ok..')
+            return False
+
+        return True
 
     async def tear_down(self):
         """ Teardown after all runs """
@@ -242,16 +262,29 @@ class StatsRunner:
         """ Run stats gathering """
         await self.set_up()
         stats = collections.defaultdict(list)
-        for i in range(self.runs + self.WARM_UP_ROUNDS):
-            print(f'Run {i + 1} running', end='', flush = True)
+        run_nr: int = 0
+        successful_runs: int = 0
+
+        while successful_runs < self.runs + self.WARM_UP_ROUNDS:
+            run_nr += 1
+            print(f'Run {run_nr} running',
+                  end='', flush=True)
+            log.debug('Run %d', run_nr)
             await self.before_run()
             enter_time_ns = time.monotonic_ns()
             run_stats = await self._run_once()
             time_spent_ms = (time.monotonic_ns() - enter_time_ns) // 10**6
-            print(f'\x1b[7;D(~{time_spent_ms} ms)')
+            # Run can fail for some odd reason, in that case there are no stats
+            # returned
+            if run_stats:
+                successful_runs += 1
+            else:
+                log.error('Run failed')
+            success = '' if run_stats else ' (FAILED!)'
+            print(f'\x1b[7;D(~{time_spent_ms} ms){success}')
             await self.after_run()
             # Warm up laps don't count
-            if i >= self.WARM_UP_ROUNDS:
+            if successful_runs > self.WARM_UP_ROUNDS:
                 for k, v in run_stats.items():
                     stats[k].append(v)
 
@@ -266,6 +299,16 @@ class StatsRunner:
         outb, _errb = await proc.communicate()
         log.debug('Client finished')
         outs = outb.decode()
+
+        # In a multi-node network anything can happen, and client doesn't do
+        # re-tries.. so once a full moon (and twice or more when a paper is
+        # due) failures do happen
+        if proc.returncode:
+            log.error('Client failed: ')
+            for line in outs.split('\n'):
+                log.error(line)
+            return {}
+
         # Gather stats output
         # Could obv. use some more sophisticated channel, but this is fast enough..
         for m in filter(None, map(self.STATSOUT_RE.match, outs.split('\n'))):
@@ -292,7 +335,9 @@ class HotStatsRunner(StatsRunner):
         if not self.secondary_ipo:
             self.secondary_ipo = await self._start_daemon(self.secondary_connection)
         # Make sure that secondary IPO is connected the DHT as well
-        await self.wait_for_startup()
+        _success = await self.wait_for_startup()
+        # TODO: Can we recover?
+        #       Both daemons should be restarted, and dry runs run.. (is it worth it?)
 
     async def after_run(self):
         """ Stop secondary daemon, to be restarted before next run (to purge ICON) """
@@ -326,11 +371,25 @@ class ColdStatsRunner(HotStatsRunner):
             map(lambda s: s[0:12],  # UUID is in beginning
                 filter(lambda s: 'ICON_' in s,  # ICON containers start with this
                        output.split('\n'))))
-        assert len(uuids) > 0
-        # There should always be at least one to remove, as we have already done one run
+        # If migration was unsuccessful last run , there might be no containers
+        # to remove
+        if not uuids:
+            log.error('Couldn\'t find  containers to remove?')
+            return
+
         log.debug('Removing containers %s', uuids)
-        result = await self.secondary_connection.run('docker container rm ' + ' '.join(uuids))
-        if result.exit_status != 0:
+        # We can hit a perfect storm where the container hasn't had the time
+        # to shut down, due to $REASONS. Re-try a few times
+        success = False
+        for _i in range(5):
+            result = await self.secondary_connection.run('docker container rm ' + ' '.join(uuids))
+            if result.exit_status == 0:
+                success = True
+                break
+            log.error('Container removal failed?: %s',
+                      convert_data(result.stdout))
+            await asyncio.sleep(1)
+        if not success:
             raise Exception('Failure removing containers')
 
         result = await self.secondary_connection.run('docker image ls')
@@ -344,7 +403,11 @@ class ColdStatsRunner(HotStatsRunner):
             map(lambda s: list(filter(None, s.split(' ')))[2],  # UUUId is here
                 filter(lambda s: s.startswith('vm1'),  # ICON containers start with this
                        output.split('\n'))))
-        assert len(uuids) > 0
+
+        # This *might* happen if the secondary server barfs between ICON fetch and run
+        if not uuids:
+            log.error('Couldn\'t find images to remove')
+            return
         log.debug('Removing images %s', uuids)
         result = await self.secondary_connection.run('docker image rm -f ' + ' '.join(uuids))
         if result.exit_status != 0:
