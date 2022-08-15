@@ -503,7 +503,15 @@ class Traceroute(Thread):
                 if events & select.EPOLLERR > 0:
                     # Always empty the err queue, even when the socket isn't active
                     sock = allocated_sockets[fd]
-                    msg, aux, flags, saddr = sock.recvmsg(1500, 1500, socket.MSG_ERRQUEUE)
+                    try:
+                        msg, aux, flags, saddr = sock.recvmsg(1500, 1500, socket.MSG_ERRQUEUE)
+                    except BlockingIOError:
+                        # This gem was spotted in the wild - even though poll returns with
+                        # an event, socket throws as it would block (i.e. syscall returns
+                        # EWOULDBLOCK)
+                        # Log it in case it indicates some fundamental problem somewhere
+                        log.error('Socket read and poll disagree on EPOLLERR data availability')
+                        continue
 
                     addr, port = saddr
                     if fd not in active:
