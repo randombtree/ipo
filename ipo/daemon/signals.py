@@ -2,6 +2,7 @@
 import asyncio
 import signal
 import logging
+import inspect
 from abc import ABCMeta, abstractmethod
 
 from . state import Icond
@@ -58,9 +59,40 @@ class SigtermHandler(QuitSignalHandler):
         log.info("SIGTERM received")
 
 
+class TaskDumpHandler():
+    """ Task dumpper handler """
+    icond: Icond
+
+    def __init__(self, icond: Icond):
+        self.icond = icond
+
+    def handle(self):
+        """ Signal handler; print stack traces """
+        current_task = asyncio.current_task()
+        log.critical('Asyncio task dump:')
+
+        for task in asyncio.all_tasks():
+            if task == current_task:
+                continue
+            frames = task.get_stack()
+            for frame in frames:
+                frameinfo = inspect.getframeinfo(frame)
+                clist = frameinfo.code_context
+                context = clist[0].strip() if clist else '<unknown>'
+                log.critical('%s:%d at %s - %s',
+                             frameinfo.filename,
+                             frameinfo.lineno,
+                             frameinfo.function,
+                             context)
+
+        log.critical('End of asyncio task dump')
+
+
 def set_signal_handlers(icond: Icond):
     """ Hook up some common signal handlers """
     loop = asyncio.get_event_loop()
     # Allow quitting with CTRL-C and kill
     loop.add_signal_handler(signal.SIGINT, SigintHandler(icond).handle)
     loop.add_signal_handler(signal.SIGTERM, SigtermHandler(icond).handle)
+    # Dump asyncio tasks on USR1
+    loop.add_signal_handler(signal.SIGUSR1, TaskDumpHandler(icond).handle)
