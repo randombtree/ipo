@@ -632,4 +632,8 @@ class Traceroute(Thread):
         with select.epoll() as epoll:
             epoll.register(self.wakeup_wait,
                            select.EPOLLIN)
-            self._do_poll(epoll)
+            try:
+                self._do_poll(epoll)
+            except Exception as e:
+                log.critical('Exception in traceroute:', exc_info = True)
+                raise e
