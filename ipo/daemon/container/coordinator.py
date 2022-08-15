@@ -168,16 +168,16 @@ class RemoteDeploymentMonitor(RemoteDeployment, MessageTaskHandler):
         await self._send(msg)
         while True:
             async with self as event:
-                log.debug('Received event: %s', msg)
                 if isinstance(event, ShutdownEvent):
                     log.debug('Shutting down')
                     await self._send(message.ShutdownCommand.reply_to(initial_msg))
                     self.remote_ip = self.remote_ports = None
-                    await self.set_state(DeploymentState.STOPPED)
+                    await self.set_state(DeploymentState.FAILED)
                     # No need to wait.. remote will shut down container later due to missing uplink
                     return
                 assert isinstance(event, MessageEvent)
                 msg = event.msg
+                log.debug('Received event: %s', msg)
                 if message.MigrationResponse.match(msg):
                     if self.is_starting():
                         # TODO: Validate some more?
