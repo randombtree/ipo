@@ -133,7 +133,10 @@ class Orchestrator(Emitter):
             await connection.initiate_handshake()
             await self.new_connection(connection)
         except OSError:
-            log.debug('Connect failed', exc_info = True)
+            if log.isEnabledFor(logging.INFO):
+                log.info('Connection to %s failed', self.peer_addr)
+            else:
+                log.debug('Connect failed', exc_info=True)
             self.state = ConnectionState.FAILED
             # TODO: Retry etc.
             await self.Disconnected()  # type: ignore
