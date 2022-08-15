@@ -49,7 +49,7 @@ SOCK_EXTENDED_ERR_STRUCT_SIZE = struct.calcsize(SOCK_EXTENDED_ERR_STRUCT)
 SOCK_EXTENDED_ERR_OFFENDER_OFFSET = SOCK_EXTENDED_ERR_SIZE + 4
 
 # These might be better as config vars, but for now should be at least 'ok'
-MAX_PARALLEL_PROBES = 10  # Send max this many packets towards host (with differing ttl)
+MAX_PARALLEL_PROBES = 20  # Send max this many packets towards host (with differing ttl)
 MAX_MISSES = 3            # After this many timeouts in a row, conclude that we have reached the end
 MAX_SOCKETS = int(resource.getrlimit(resource.RLIMIT_NOFILE)[0] / 4)
 MAX_RTT = 1.500           # Wait this long for reply from router
