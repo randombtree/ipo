@@ -12,6 +12,7 @@ from .. events import (
 )
 from .. messagetask import MessageTaskHandler, MessageHandler
 from . import container as mod_container
+from . deployment import DeploymentState
 
 log = logging.getLogger(__name__)
 
@@ -62,10 +63,15 @@ class HandleClientMigrate(MessageTaskHandler):
                 elif isinstance(event, Event):
                     ip = default(deployment.remote_ip, "")
                     ports = default(deployment.remote_ports, {})
-                    deployment_state = event['state'].name
-                    log.debug('Deployment state change %s, ip: %s, ports: %s', deployment_state, ip, ports)
+                    deployment_state = event['state']
+                    log.debug('Deployment state change %s, ip: %s, ports: %s',
+                              deployment_state.name, ip, ports)
                     await self._sendmsg(message.ClientDeploymentStatus,
-                                        state = deployment_state,
-                                        ip = ip,
-                                        ports = ports)
+                                        state=deployment_state.name,
+                                        ip=ip,
+                                        ports=ports)
+                    if deployment_state == DeploymentState.FAILED:
+                        log.debug('Entering failed state, deployment bailing out')
+                        break
+        runner.clear()  # Cancel event reader
         log.debug('Stopping')
