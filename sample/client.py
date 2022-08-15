@@ -321,8 +321,9 @@ class SrvSession(Emitter):
             stack.pop_all()
 
 
-async def communicate(host):
+async def communicate(host) -> int:
     """ Communicate with srv ICON """
+    ret: int = 0
     async with AsyncExitStack() as stack:
         ClientStats.record('start')
         runner = await stack.enter_async_context(AsyncTaskRunner.create(exit_timeout = 10))
@@ -330,10 +331,11 @@ async def communicate(host):
 
         print(srv_task, type(srv_task))
         srv_task = runner.add_task(srv_task)
-        event_queue = Queue()
+        event_queue: Queue[Event] = Queue()
         srv.Connected.connect(event_queue)
         read_task = runner.run(srv.receive)
         event_task = runner.run(event_queue.get)
+        timeout_task = runner.run(asyncio.sleep(120))
         quit_task = None
         connected_events = 0
 
@@ -350,7 +352,7 @@ async def communicate(host):
                     # Quit after migrate
                     # TODO: Specify different exit parameters
                     if connected_events == 2:
-                        quit_task = runner.run(asyncio.sleep(1))
+                        quit_task = runner.run(asyncio.sleep(0))
                 else:
                     log.error('Unhandled event %s', event)
             elif srv_task == task:
@@ -359,9 +361,14 @@ async def communicate(host):
             elif quit_task == task:
                 log.debug('Done, quitting')
                 break
+            elif timeout_task == task:
+                log.error('Timeout connecting?')
+                ret = 1
+                break
+    return ret
 
 
-async def main(argv):
+async def main(argv) -> int:
     """
     Client stub.
 
@@ -377,8 +384,11 @@ async def main(argv):
 
     ClientStats.init()
 
-    await communicate(host)
-    print(ClientStats.dump())
+    ret = await communicate(host)
+    if not ret:
+        print(ClientStats.dump())
+    return ret
+
 
 if __name__ == '__main__':
-    asyncio.run(main(sys.argv))
+    sys.exit(asyncio.run(main(sys.argv)))
