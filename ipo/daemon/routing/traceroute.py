@@ -547,6 +547,14 @@ class Traceroute(Thread):
                                 # These are the errors we are looking for:
                                 if ee_type == ICMP_TYPE_UNREACHABLE and ee_code == ICMP_CODE_PORT_UNREACHABLE:
                                     log.debug('%s Finished probe to destination, TTL %d', addr, probe.ttl)
+                                    # Linux doesn't copy the ICMP payload IP packet TTL anywhere :(
+                                    # Checked in ip_sockglue.c and icmp.c
+                                    # Checking the TTL could speed up rare cases where the first port
+                                    # unreachable packet(s) go missing - enabling us to figure out
+                                    # which TTL a host has directly
+                                    # log.debug('%d %d %d %s %s',
+                                    #           ee_errno, ee_info, ee_data, flags, err_aux)
+                                    # log.debug('%s', msg)
                                     # TraceTask will handle it anyway
                                 elif ee_type == ICMP_TYPE_TE and ee_code == ICMP_CODE_TIME_EXEEDED:
                                     if log.getEffectiveLevel() <= logging.DEBUG:
