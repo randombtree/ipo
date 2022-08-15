@@ -599,7 +599,9 @@ class Traceroute(Thread):
                         qp.socket.setsockopt(socket.SOL_IP,
                                              socket.IP_TTL,
                                              qp.ttl)
-                        sent = qp.socket.sendto('IPO traceroute'.encode(),
+                        # Include TTL here just to make ICMP:s in simulator prettier,
+                        # without having to wrangle through the headers in Wireshark
+                        sent = qp.socket.sendto(f'IPO traceroute TTL {qp.ttl}'.encode(),
                                             (task.hostaddr, TRACEROUTE_PORT))
                         if sent == 0:
                             log.debug('Send queue full, retrying')
