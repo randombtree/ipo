@@ -43,9 +43,10 @@ ICMP_CODE_TIME_EXEEDED = 0     # 11, 0
 #          /* More data may follow */
 #      };
 
-SOCK_EXTENDED_ERR_SIZE = 4 + 4 + 4 + 4  + 4  # Size of the sock_extended_err full buffer
-SOCK_EXTENDED_ERR_STRUCT = 'IBBB'  # Only interesed in these anyway
+SOCK_EXTENDED_ERR_SIZE = 4 + (4 * 1) + 4 + 4  # Size of the sock_extended_err struct
+SOCK_EXTENDED_ERR_STRUCT = 'IBBBBII'          # Extended err (struct) unpack format
 SOCK_EXTENDED_ERR_STRUCT_SIZE = struct.calcsize(SOCK_EXTENDED_ERR_STRUCT)
+SOCK_EXTENDED_ERR_OFFENDER_OFFSET = SOCK_EXTENDED_ERR_SIZE + 4
 
 # These might be better as config vars, but for now should be at least 'ok'
 MAX_PARALLEL_PROBES = 10  # Send max this many packets towards host (with differing ttl)
@@ -310,8 +311,8 @@ def create_socket():
 
 def get_so_ee_offender(eerr: bytes) -> Optional[bytes]:
     """ Decode the offender address from extended error """
-    if len(eerr) > SOCK_EXTENDED_ERR_SIZE:
-        extra = eerr[SOCK_EXTENDED_ERR_SIZE:]
+    if len(eerr) > SOCK_EXTENDED_ERR_OFFENDER_OFFSET:
+        extra = eerr[SOCK_EXTENDED_ERR_OFFENDER_OFFSET:]
         if len(extra) >= 4:
             return extra[:4]
     return None
@@ -538,7 +539,8 @@ class Traceroute(Thread):
                                 continue
                             err_struct = struct.unpack(SOCK_EXTENDED_ERR_STRUCT,
                                                        cmsg_data[:SOCK_EXTENDED_ERR_STRUCT_SIZE])
-                            ee_errno, ee_origin, ee_type, ee_code = err_struct
+                            ee_errno, ee_origin, ee_type, ee_code, ee_pad, ee_info, ee_data = err_struct
+                            err_aux = None if len(cmsg_data) == SOCK_EXTENDED_ERR_STRUCT_SIZE else cmsg_data[SOCK_EXTENDED_ERR_STRUCT_SIZE:]
                             err_src = get_so_ee_offender(cmsg_data)
                             if err_src is None:
                                 log.warning('Missing offender address on ICMP?')
