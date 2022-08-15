@@ -1,0 +1,13 @@
+#!/bin/bash
+# Run all statsrunner for all stats.
+# Run at the client location (e.g. mininet host)
+
+if [ $# -ne 1 ];then
+    echo $0 '<num runs>'
+    exit 1
+fi
+num=$1
+p=$(dirname $0)
+for run in direct hot cold;do
+    $p/statsrunner.py vm1:8080 stats-$run-$num.csv $num $run
+done
