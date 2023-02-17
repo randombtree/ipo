@@ -1,0 +1,17 @@
+#!/bin/sh
+# Make VM from scratch
+if ! dpkg -s vmdb2 >/dev/null 2>&1;then
+    echo "Need vmdb2 installed, please apt-get install vmdb2"
+    exit 1
+fi
+
+if [ x"$http_proxy" != x ];then
+    echo "Using http proxy $http_proxy"
+fi
+echo "Will need root to build image..."
+# Preserve http_proxy for apt
+sudo --preserve-env=http_proxy vmdb2 \
+--output icondvm.img \
+--rootfs-tarball icondvm_root.tar \
+--log build.log \
+amd64-uefi.vmdb

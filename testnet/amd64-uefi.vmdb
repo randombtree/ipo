@@ -1,0 +1,115 @@
+# ICONd test environment image builder
+# Based on sample file from vmdb2 - amd64-uefi.vmdb
+
+# nb: vmdb2 respects http_proxy environment variable in root environment for apt-get
+
+
+# This is a sample VMDB2 input file that specifies a simple system for
+# an amd64 machine that boots with UEFI.
+
+steps:
+  - mkimg: "{{ output }}"
+    size: 10G
+
+  - mklabel: gpt
+    device: "{{ output }}"
+
+  - mkpart: primary
+    device: "{{ output }}"
+    start: 0%
+    end: 1G
+    tag: efi
+
+  - mkpart: primary
+    device: "{{ output }}"
+    start: 1G
+    end: 100%
+    tag: /
+
+  - kpartx: "{{ output }}"
+
+  - mkfs: vfat
+    partition: efi
+
+  - mkfs: ext4
+    partition: /
+
+  - mount: /
+
+  # Using the virtual-filesystems plugin here upsets qemu-debootstrap,
+  # which ends up unable to create /dev/fd within the chroot, causing
+  # the qemu-debootstrap phase to fail. Until we get to the bottom
+  # that, don't enable the plugin.
+  #- virtual-filesystems: /
+
+  - unpack-rootfs: /
+
+  - debootstrap: buster
+    arch: amd64
+    # http://deb.debian.org/debian
+    mirror: http://www.nic.funet.fi/debian/
+    target: /
+    unless: rootfs_unpacked
+
+  # Fun times, virtualfs makes bootstrap fail,
+  # but many parts require the tempdir to be accessible
+  - chroot: /
+    shell: |
+      mkdir -p /tmp/user/0
+
+  - apt: install
+    recommends: false
+    packages:
+      - linux-image-amd64
+      - mininet
+      - locales
+      - python3-pip   # Debian doesn't come with python3 bindings for mininet?
+      - curl # For docker key install
+      - cgroupfs-mount
+      - traceroute
+      - tcpdump
+      - bridge-utils
+      - vlan
+      - rsync
+      - python3.9
+      - python3-aiohttp
+      - openssh-server
+      # wget
+      # - bind9-host
+      # - aufs-tools?
+      # - slirp4netns
+      # For local use
+      #-keyboard-configuration
+      #-console-setup
+      # python-tk     # For miniedit
+      # xbitmaps      # ditto
+      # xterm	      # as well
+      # grub-efi      # hmm, how to get it to bootstrap properly
+    #fs-tag: /
+    tag: /
+    unless: rootfs_unpacked
+
+  - cache-rootfs: /
+    unless: rootfs_unpacked
+
+  # Todo: Copy getty@ttyS0.service to /lib/systemd/system
+  # also link into /lib/systemd/system/getty.target.wants
+  # ln -t /lib/systemd/system/getty.target.wants -s "/lib/systemd/system/getty@ttyS0.service"
+
+  - chroot: /
+    shell: |
+      echo "root:icondroot"|chpasswd
+      echo icon-vm > /etc/hostname
+      echo PermitRootLogin yes >> /etc/ssh/sshd_config
+      python3 -m pip install mininet    # Debian doesn't come with python3 bindings for mininet
+      #echo "auto eth0" > /etc/network/interfaces.d/eth0
+      #echo "iface eth0 inet dhcp" >> /etc/network/interfaces.d/eth0
+      # Paswordless login on serial console
+      echo "ttyS0" >> /etc/nopasswdlogin  # Allow pasword-less login from serial console
+      echo "auth sufficient pam_listfile.so item=tty sense=allow file=/etc/nopasswdlogin onerr=fail apply=root" > /etc/pam.d/login.new
+      cat  /etc/pam.d/login >> /etc/pam.d/login.new
+      mv -b /etc/pam.d/login.new /etc/pam.d/login
+
+  - grub: uefi
+    tag: /
+    efi: efi
