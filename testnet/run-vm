@@ -1,0 +1,212 @@
+#!/bin/bash -e
+# Run VM, only supports Debian-based distros for the moment
+# run_vm start <image>
+# additionally the image neeeds configuration here in the script
+
+NETNS=iconns     # Network namespace to run icond tests in
+BRIDGE_IF=iconbr # Bridge connecting VM's together
+BRIDGE_ADDR=10.255.254.253/24
+DEFAULT_RAM=512M
+IP_CMD=$(command -v ip)
+
+export BRIDGE_IF  # For qemu-ifup helper
+
+# Image config
+# NB: MAC addresses must be unique or else fun times happen!
+# https://serverfault.com/questions/40712/what-range-of-mac-addresses-can-i-safely-use-for-my-virtual-machines
+# Localy administered address ranges:
+# x2-xx-xx-xx-xx-xx
+# x6-xx-xx-xx-xx-xx
+# xA-xx-xx-xx-xx-xx
+# xE-xx-xx-xx-xx-xx
+
+declare -A IMAGE_ROOT=([MAC]=02:01:01:01:01:01)   # Caution: Will trash the other images!
+# root -> base
+declare -A IMAGE_BASE=(
+    [MAC]=02:02:02:02:02:02
+    [RAM]=1G
+)
+declare -A IMAGE_NET=([MAC]=12:01:01:01:01:01)    # root -> net
+# R: Change from 512M to 1G
+declare -A IMAGE_ICON1=(
+    [MAC]=22:01:01:01:01:01
+    [RAM]=1G
+)  # root -> base -> image
+declare -A IMAGE_ICON2=(
+    [MAC]=22:02:02:02:02:02
+    [RAM]=1G
+)  # -""-
+
+# Top levels commented out as not to start them accidentally
+declare -A IMAGE_CONFIG=(
+    [XXXicondvm.qcow2]=IMAGE_ROOT
+    [icon-net.qcow2]=IMAGE_NET
+    [XXXicon-base-vm.qcow2]=IMAGE_BASE
+    [icon1.qcow2]=IMAGE_ICON1
+    [icon2.qcow2]=IMAGE_ICON2
+)
+
+# We'll be bringing bridge devices and network namespaces up,
+# ... so need root
+if [ $EUID -ne 0 ];then
+    echo "Not running as root.."
+    exit 1
+fi
+
+if [ $# -lt 2 ] || [ $1 != 'start' ];then
+    echo "$0 start [image]"
+    exit 1
+fi
+
+image=$2
+if [ ! -f $image ];then
+    echo "Image '$image' not found"
+    exit 1
+fi
+
+# Badly documented in bash; but create a ref to the config var
+declare -n config=${IMAGE_CONFIG[$image]}
+if [ x$config = x ];then
+    # Some 'autoconfig' perhaps
+    echo "$image not configured"
+    #exit 1
+fi
+
+CURRENT_NS=$(ip netns identify $$)
+if [ x"$CURRENT_NS" != "x" ];then
+    echo "Run this from your root namespace; Currently in namespace '$CURRENT_NS'"
+    exit 1
+fi
+
+switch_ns() {
+    # By default set to use netns
+    # only affects 'ip' below
+    if [ $# -eq 0 ];then
+	CURRENT_NS=$NETNS
+    else
+	CURRENT_NS=$1
+    fi
+    echo "Using namespace $CURRENT_NS"
+}
+
+ip() {
+    echo $@
+    if [ x"$CURRENT_NS" = "x" ];then
+	$IP_CMD $@
+    else
+	echo $@
+	$IP_CMD -n $CURRENT_NS $@
+    fi
+}
+
+# Check if package is installed and abort if not
+installed() {
+    pkg=$1
+    if ! dpkg -s $pkg >/dev/null 2>&1;then
+	echo "Package $pkg is not installed, please apt-get install $pkg"
+	exit 1
+    fi
+    return 0
+}
+
+exec_ns() {
+    # Run command in namespace
+    $IP_CMD netns exec ${NETNS} $@
+}
+
+# Check we have all required packages
+echo "Checking for dependencies..."
+installed bridge-utils
+installed ovmf
+
+
+# Do this in separate namespace not to mess with host routing (too much)
+if [ $(ip netns|grep -c $NETNS) -eq 0 ];then
+    ip netns add $NETNS && echo "Added network namespace"
+else
+    echo "Using existing netns"
+fi
+
+# veth pairs Host <-> VM ns communication; veth-host is attached to bringe in icon ns
+if ! ip a s veth-icon >/dev/null 2>&1;then
+    echo "Creating host link veth-icon for test environment"
+    ip link add veth-icon type veth peer name veth-host
+    ip link set veth-host netns $NETNS
+    ip a a 10.255.254.254/24 dev veth-icon
+    ip l set veth-icon up
+else
+    echo "Using existing host link"
+fi
+
+# IP will use other namespace
+switch_ns
+
+# Bridge for VM's
+if ! exec_ns brctl show $BRIDGE_IF > /dev/null 2>&1;then
+    echo "Creating VM bridge $BRIDGE_IF"
+    exec_ns brctl addbr $BRIDGE_IF
+else
+    echo "Using existing VM bridge"
+fi
+
+# netns doesn't come with default lo address
+if [ $(ip a show lo|grep -c 127.0.0.1) -eq 0 ];then
+    echo "Setting network address for loopback"
+    ip a a 127.0.0.1/8 dev lo
+    ip l set lo up
+fi
+
+# Allow KVM to provide rdc to host system
+if [ $(ip a s dev $BRIDGE_IF|grep -c $BRIDGE_ADDR) -eq 0 ];then
+    ip a a 10.255.254.253/24 dev $BRIDGE_IF
+fi
+if [ $(exec_ns brctl show $BRIDGE_IF|grep -c veth-host) -eq 0 ];then
+    exec_ns brctl addif $BRIDGE_IF veth-host
+fi
+ip l set $BRIDGE_IF up
+ip l set veth-host up
+
+
+find_free_port() {
+    # Find a free port, not race free but with caution does the right thing
+    if [ $# -ne 1 ] || [[ $1 =~ '^[0-9]0$' ]];then
+	echo $0 [start-port]
+	exit 1
+    fi
+    start=$1
+    while exec_ns lsof -nPi :$start -sTCP:LISTEN > /dev/null 2>&1;do
+	start=$(($start + 1))
+    done
+    echo $start
+}
+
+find_next_tapif() {
+    # Find the next available tap interface
+    tapndx=0
+    while ip l show tap${tapndx} >/dev/null 2>&1;do
+	tapndx=$(($tapndx + 1))
+    done
+    echo tap${tapndx}
+}
+
+macaddr=${config[MAC]}
+memory=${config[RAM]:-$DEFAULT_RAM}
+tapif=$(find_next_tapif)
+telnet_port=$(find_free_port 2323)
+vnc_port=$(find_free_port 5900)
+vnc_display=$(($vnc_port - 5900))
+BRIDGE_IP=${BRIDGE_ADDR%/*}
+echo "VM telnet ${BRIDGE_IP}:${telnet_port}"
+echo "VNC address ${BRIDGE_IP}:${vnc_port} or display ${BRIDGE_IP}:${vnc_display}"
+echo "Starting VM"
+exec_ns qemu-system-x86_64 \
+	-enable-kvm \
+	-vnc ${BRIDGE_IP}:${vnc_display} \
+	-serial telnet:${BRIDGE_IP}:${telnet_port},server,nowait,nodelay \
+	-bios /usr/share/qemu/OVMF.fd \
+	-k fi \
+	-m ${memory} \
+	-smp cpus=2 \
+	-nic tap,id=nd0,ifname=${tapif},script="./qemu-ifup",model=virtio-net-pci,mac=${macaddr} \
+	-drive file=${image},format=qcow2,media=disk,index=0
+

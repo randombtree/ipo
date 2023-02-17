@@ -1,0 +1,5 @@
+#!/bin/sh
+# Add tap device to bringe; called by qemu when creating tap devices for VMs
+
+ip l set "$1" up
+brctl show $BRIDGE_IF && ip l set "$1" master $BRIDGE_IF
