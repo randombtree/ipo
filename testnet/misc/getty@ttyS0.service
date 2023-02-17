@@ -1,0 +1,9 @@
+# serial device service
+[Service]
+Type=simple
+Restart=always
+ExecStart=
+ExecStart=-/sbin/agetty -o '-p -- \\u' --keep-baud 115200,38400,9600 --noclear --autologin root ttyS0 $TERM
+
+[Install]
+WantedBy=getty.target
