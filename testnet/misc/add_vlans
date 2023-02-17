@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ $# -ne 1 ];then
+   echo "$0 <iface>"
+   exit 1
+fi
+iface=$1
+for i in {1..10};do
+    viface=${iface}.$i
+    ip link add link $iface name ${viface} type vlan id $i
+    ip l set $viface up
+done
