@@ -44,6 +44,11 @@ requirements are also available in the requirements.txt file in the project root
 
 ### Configurations of the VMs.
 
+While the IPO requirements can be installed from the Python PIP `requirements.txt`, both SSH and
+Docker must separately be configured for running the IPO benchmark/test suite. It's certainly
+possible to run IPO without the changes listed below if only using an authoritative Docker
+registry when running ICONs (also without using the test suit).
+
 #### SSH
 
 The test/stats software needs passwordless root login to VM1 and VM2 to manage
@@ -140,30 +145,45 @@ the router at tier2, "right" leg. For an overview of the network setup,
 please refer to [BLOMGREN, Roger Arne. Implementing and evaluating an ICON orchestrator. 2022].
 The test hosts are named l3_h1 and l3_h2. Running commands in the host or router
 namespaces is done by supplying the host name before the actual command to be run
-on the mininet prompt. For further information about mininet, consult the documentations
-and tutorials available for mininet on the Internet.
+on the mininet prompt (e.g. `l3_h1 ping l1_h1). For further information about mininet,
+consult the documentations and tutorials available for mininet on the Internet.
 
 
 ## Running IPO
 
 Make sure that IPO is runnable on both VM1 and VM2. The base docker image needs to be
-built and installed on VM1 (by e.g. using `bin/build.sh`) and after that the sample application
-can be built (`sample/build.sh`). IPO is started with
+built and installed on VM1 (by e.g. using `bin/build.sh`) and after that the
+sample application can be built (`sample/build.sh` that creates the `iconsrv`
+Docker image). IPO is started with
 
  > `./bin/ipo daemon start`
 
+
+### Starting an ICON
 
 The sample application ICON can be started with e.g.
 
  > `./bin/ipo container run iconsrv -p 8080:8080 -e PORT=8080`
 
 
-This will allow the client to connect to the VM1 at port 8080 e.g.  (press ctrl-c to stop client)
+This will allow the client to connect to the VM1 at port 8080.
+
+
+### Connecting to the sample application
+
+The sample client can connect to a started ICON and it is capable of migrating
+to a closer node. The client quits after one migration. Press ctrl-c to stop
+client if no migration is happening.
 
  > `./sample/client.py vm1:8080`
 
 
-More IPO nodes can be added to the network, by executing the DHT bootstrap method on them, e.g.
+### Bootstrapping an orchestrator
+
+More IPO nodes can be added to the network, by executing the DHT bootstrap
+method on them, e.g.
 
  > `./bin/ipo daemon bootstrap 10.1.0.253 1337`
 
+The bootstrapping allows other orchestrators to find this node. Any already
+bootstrapped node suffices as a bootstrap target.
